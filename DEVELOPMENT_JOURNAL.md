@@ -1516,3 +1516,17 @@ Date: 2026-03-22
 
 Notes:
 - В чате подготовлено развёрнутое описание дерева репозитория, доменной модели `NetworkProvider` / `NetworkElement`, enum `NetworkElementType`, геопредставления (`path` vs точка), API `GET /api/network`, визуализации (`EarthScene`, `MapView`, `factories.ts`) и чеклиста для добавления новых типов (в т.ч. рассинхрон `networkElementOps` vs Prisma для offline-типов).
+
+## Git: initial push на GitHub
+
+Date: 2026-03-22
+
+FilesChanged:
+- Инициализирован git в корне `d:\diploma`, ветка `main`, remote `origin` → `https://github.com/zyaba1212/diploma.git`
+
+HowToTest:
+- `git remote -v` / открыть репозиторий на GitHub
+
+Notes:
+- В коммит не попали `node_modules/`, `.next/`, `.env`/`.env.local` (см. `.gitignore`).
+- Коммит: `Initial commit: diploma Next.js app (globe, network, Solana auth, Prisma)`.
