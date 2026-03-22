@@ -1,0 +1,76 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --panel: rgba(20, 26, 46, 0.72);
+  --text: #e8ecff;
+  --muted: rgba(232, 236, 255, 0.7);
+  --border: rgba(232, 236, 255, 0.16);
+  --accent: #7aa2ff;
+  --danger: #ff6b6b;
+}
+
+/* Leaflet base styles (required for tiles/controls). */
+@import 'leaflet/dist/leaflet.css';
+@import '@solana/wallet-adapter-react-ui/styles.css';
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 700px at 20% 10%, rgba(122, 162, 255, 0.2), transparent 60%),
+    radial-gradient(900px 600px at 70% 30%, rgba(255, 107, 107, 0.12), transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* Solana Wallet Adapter UI — под тёмную тему приложения */
+.wallet-adapter-toolbar .wallet-adapter-button {
+  background: rgba(20, 26, 46, 0.95) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  font-family: inherit !important;
+}
+
+.wallet-adapter-toolbar .wallet-adapter-button:hover {
+  background: rgba(30, 38, 64, 0.98) !important;
+}
+
+.wallet-adapter-modal-wrapper {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+/* Mobile utilities */
+@media (max-width: 767px) {
+  .hide-mobile { display: none !important; }
+}
+@media (min-width: 768px) {
+  .hide-desktop { display: none !important; }
+}
+
+/* Smooth scrolling */
+html { scroll-behavior: smooth; }
+
+/* Better touch targets */
+@media (max-width: 767px) {
+  button, a { min-height: 44px; }
+  input, textarea, select { font-size: 16px !important; }
+}
+
+/* Prevent horizontal scroll */
+html, body { overflow-x: hidden; max-width: 100vw; }
+
+/* Leaflet mobile fix */
+.leaflet-container { touch-action: none; }

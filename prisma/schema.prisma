@@ -1,0 +1,231 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Scope {
+  GLOBAL
+  LOCAL
+}
+
+enum ProposalStatus {
+  DRAFT
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+  APPLIED
+  CANCELLED
+}
+
+enum ChangeActionType {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+enum NetworkElementType {
+  CABLE_COPPER
+  CABLE_FIBER
+
+  PROVIDER
+  SERVER
+  SWITCH
+  MULTIPLEXER
+  DEMULTIPLEXER
+  REGENERATOR
+  MODEM
+
+  CABLE_UNDERGROUND_COPPER
+  CABLE_UNDERGROUND_FIBER
+
+  BASE_STATION
+  SATELLITE
+  EQUIPMENT
+
+  // Offline-transaction-specific types
+  MESH_RELAY
+  SMS_GATEWAY
+  VSAT_TERMINAL
+  OFFLINE_QUEUE
+}
+
+enum VoteType {
+  FOR
+  AGAINST
+}
+
+model User {
+  id        String   @id @default(cuid())
+  pubkey    String   @unique
+  /// Уникальный ник на сайте (nullable до первой установки)
+  username     String?   @unique
+  usernameSetAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model NetworkProvider {
+  id        String           @id @default(cuid())
+  name      String
+  scope     Scope
+  sourceUrl String?
+  elements  NetworkElement[]
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([scope])
+}
+
+model NetworkElement {
+  id         String             @id @default(cuid())
+  scope      Scope
+  type       NetworkElementType
+  providerId String?
+  provider   NetworkProvider?   @relation(fields: [providerId], references: [id], onDelete: SetNull)
+
+  name     String?
+  sourceId String? @unique
+
+  lat      Float?
+  lng      Float?
+  altitude Float?
+
+  path     Json?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Optional logical target for ChangeAction (Stage 5 propose / Stage 6 chain)
+  targetOfChangeActions ChangeAction[] @relation("TargetElement")
+
+  @@index([scope])
+  @@index([scope, type])
+  @@index([scope, lat, lng])
+  @@index([type])
+  @@index([lat, lng])
+}
+
+model Proposal {
+  id           String          @id @default(cuid())
+  scope        Scope
+  authorPubkey String
+  status       ProposalStatus
+  title        String?
+  description  String?
+
+  // Stage 6 submission facts (kept optional so Stage 5 draft creation works)
+  contentHash         String?
+  signature           String? // base58 signature over contentHash
+  onChainTxSignature  String?
+  onChainSubmittedAt  DateTime?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  submittedAt DateTime?
+  decidedAt   DateTime?
+
+  votingEndsAt DateTime?
+
+  /// Показывать вверху списка предложений (референсный кейс диплома и т.п.).
+  pinned     Boolean  @default(false)
+
+  actions ChangeAction[]
+  votes   Vote[]
+
+  @@index([authorPubkey, status])
+  @@index([status, createdAt])
+  @@index([authorPubkey, status, createdAt])
+  @@index([pinned, createdAt])
+  @@index([onChainTxSignature])
+  @@index([onChainSubmittedAt])
+
+  moderationDecision ModerationDecision?
+}
+
+model ChangeAction {
+  id              String           @id @default(cuid())
+  proposalId      String
+  proposal        Proposal         @relation(fields: [proposalId], references: [id])
+
+  actionType      ChangeActionType
+  targetElementId String?
+  targetElement   NetworkElement?  @relation("TargetElement", fields: [targetElementId], references: [id])
+
+  elementPayload Json
+  reversePayload Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([proposalId])
+  @@index([targetElementId])
+}
+
+model HistoryEntry {
+  id               String        @id @default(cuid())
+  proposalId       String
+
+  actionId         String
+
+  appliedByPubkey  String?
+  appliedAt        DateTime
+
+  // Stored diff/snapshot sufficient for rollback to restore NetworkElement state.
+  diff             Json
+
+  @@index([proposalId])
+  @@index([actionId])
+  @@index([appliedAt])
+  // For rollback/history list: latest entry for a proposal.
+  @@index([proposalId, appliedAt(sort: Desc)])
+}
+
+model ModerationDecision {
+  id             String        @id @default(cuid())
+  proposalId     String        @unique
+  proposal       Proposal      @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  moderatorPubkey String
+  fromStatus     ProposalStatus
+  toStatus       ProposalStatus
+  decidedAt      DateTime      @default(now())
+
+  // Optional: admin/operator signature or other proof artifact (base58/txSignature etc.)
+  decisionSignature String?
+
+  @@index([moderatorPubkey, decidedAt])
+  @@index([toStatus, decidedAt])
+}
+
+model Vote {
+  id          String   @id @default(cuid())
+  proposalId  String
+  proposal    Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  voterPubkey String
+  voteType    VoteType
+  signature   String
+  txSignature String?
+  votedAt     DateTime @default(now())
+
+  @@unique([proposalId, voterPubkey])
+  @@index([proposalId])
+}
+
+model NewsCache {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  url         String    @unique
+  source      String
+  publishedAt DateTime?
+  fetchedAt   DateTime  @default(now())
+
+  @@index([publishedAt])
+  @@index([source])
+}
+

@@ -1,0 +1,10 @@
+[workspace]
+members = ["programs/proposal-submission"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[workspace.dependencies]
+anchor-lang = "0.30.1"
+

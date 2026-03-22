@@ -1,0 +1,16 @@
+.next/
+node_modules/
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.log
+
+# Prisma
+prisma/dev.db
+
+# Data (optional)
+data/
+
