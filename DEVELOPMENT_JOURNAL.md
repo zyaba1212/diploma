@@ -1530,3 +1530,13 @@ HowToTest:
 Notes:
 - В коммит не попали `node_modules/`, `.next/`, `.env`/`.env.local` (см. `.gitignore`).
 - Коммит: `Initial commit: diploma Next.js app (globe, network, Solana auth, Prisma)`.
+
+## CI: fix ESLint (sandbox Leaflet cleanup)
+
+Date: 2026-03-22
+
+FilesChanged:
+- `src/app/sandbox/page.tsx` — в эффекте 2D-карты сохранён снимок `leafletLayersRef.current` в `layersForCleanup` в начале эффекта; cleanup вызывает `layersForCleanup.clear()` (правило `react-hooks/exhaustive-deps`; на GitHub Actions `next lint` падал из‑за предупреждения).
+
+HowToTest:
+- `npm run lint` → «No ESLint warnings or errors»; `npm run build`

@@ -191,6 +191,7 @@ export default function SandboxPage() {
     if (viewMode !== 'MAP_2D' || !mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
     let cancelled = false;
+    const layersForCleanup = leafletLayersRef.current;
 
     (async () => {
       const L = (await import('leaflet')).default;
@@ -299,7 +300,7 @@ export default function SandboxPage() {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
-      leafletLayersRef.current.clear();
+      layersForCleanup.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
