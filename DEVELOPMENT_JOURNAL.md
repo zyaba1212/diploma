@@ -7,6 +7,14 @@
 - **Правило:** агент/ассистент при **существенных** правках кода или конфигов **обязан** в той же сессии дополнять этот файл: что сделано, грабли, решения (см. `AGENTS.md`). Не опускать под предлогом «пользователь не просил md» — для проекта это часть процесса.
 - **Закрепление:** `.cursor/rules/development-journal.mdc` (`alwaysApply: true`), 2026-03-22.
 
+## ER-диаграмма БД для пояснительной записки (2026-03-23)
+
+- Сгенерировано изображение ER-схемы в стиле учебной диаграммы (таблицы Prisma: User, NetworkProvider, NetworkElement, Proposal, ChangeAction, Vote, ModerationDecision, HistoryEntry, NewsCache): [`docs/er-diagram-global-network-db.png`](docs/er-diagram-global-network-db.png) (копия также в `.cursor/.../assets/`). При правках `schema.prisma` обновить картинку или заменить на экспорт из dbdiagram.io / IDE.
+
+## UI mockup: лента новостей 1440×900 (2026-03-23)
+
+- Сгенерирован wireframe-макет (тёмная тема, glassmorphism, акценты cyan `#67e8f9` / violet `#a78bfa`, лёгкий noise): [`assets/wireframe-news-feed-1440-dark-glass.png`](assets/wireframe-news-feed-1440-dark-glass.png).
+
 ## Мобильная легенда + новости без RSS в GET (2026-03-22)
 
 - **Легенда 3D:** на `max-width: 768px` по умолчанию только кнопка «Легенда»; раскрытие — диалог с `max-height` + скролл, закрытие по фону или «Закрыть». Десктоп без изменений. [`src/components/EarthScene.tsx`](src/components/EarthScene.tsx), вынесено тело в `GlobeLegendBody`.
@@ -1516,3 +1524,40 @@ Date: 2026-03-22
 
 Notes:
 - В чате подготовлено развёрнутое описание дерева репозитория, доменной модели `NetworkProvider` / `NetworkElement`, enum `NetworkElementType`, геопредставления (`path` vs точка), API `GET /api/network`, визуализации (`EarthScene`, `MapView`, `factories.ts`) и чеклиста для добавления новых типов (в т.ч. рассинхрон `networkElementOps` vs Prisma для offline-типов).
+
+## Переезд проекта с флешки: пути + проверка запуска (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `AGENTS.md`
+- `docs/windows-dev.md`
+- `docs/local-dev-docker.md`
+- `docs/agents/stage6-prompts.md`
+- `docs/agents/stage7-prompts.md`
+- `docs/agents/stage8-prompts.md`
+
+What changed:
+- Убраны/исправлены жёсткие абсолютные ссылки `C:\diploma\...` в документации и агентских промптах, чтобы репозиторий был переносимым между каталогами.
+- Пути для stage-промптов и `DEVELOPMENT_JOURNAL.md` переведены на относительные (`docs/...`, `DEVELOPMENT_JOURNAL.md`) или на нейтральную формулировку "корень проекта".
+- Поднят Docker Desktop и запущен контейнер Postgres `z96a-pg` на `localhost:5432`.
+- Выполнен `npm install` (восстановлены зависимости после переноса).
+
+Runtime check:
+- `npm run dev` стартует Next.js, но завершается ошибкой: "Couldn't find any `pages` or `app` directory".
+- В корне репозитория отсутствуют каталоги `src/` и `prisma/` (по `git status` ранее они помечены как массово удалённые), поэтому текущее приложение в этом состоянии неработоспособно.
+
+## Восстановление завершено: проверка production build + commit (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- После восстановления `src/`, `prisma/`, `public/`, `scripts/` из рабочей копии и reset dev-БД выполнена production-проверка: `npm run build`.
+- Сборка прошла успешно на Next.js `15.5.14`; статические и динамические роуты собраны без ошибок.
+- Зафиксирован один текущий warning линтера в `src/app/sandbox/page.tsx` (cleanup в `useEffect` для `leafletLayersRef.current`) — не блокирует build.
+
+Result:
+- Статус проекта: рабочий в dev и production build режимах после восстановления.

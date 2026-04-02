@@ -53,7 +53,7 @@ function normalizeLngDeg(lng) {
 
 function computeGlobeCenterLatLngFromQuat(globeQuat) {
   // Mirrors EarthScene.computeGlobeCenterLatLng() logic (deterministic inverse test).
-  const front = new THREE.Vector3(0, 0, 1);
+  const front = new THREE.Vector3(0, 0, -1);
   const local = front.applyQuaternion(globeQuat.clone().invert());
 
   const y = Math.max(-1, Math.min(1, local.y));
@@ -84,7 +84,7 @@ function orientGlobeGroupCenterFromLatLngQuat(globeQuat, lat, lng) {
   const localCenterRay = new THREE.Vector3(x, y, z);
   if (localCenterRay.lengthSq() < 1e-12) return globeQuat;
 
-  const front = new THREE.Vector3(0, 0, 1);
+  const front = new THREE.Vector3(0, 0, -1);
   const q = new THREE.Quaternion().setFromUnitVectors(localCenterRay.normalize(), front);
   globeQuat.copy(q);
   return globeQuat;

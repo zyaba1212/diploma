@@ -85,6 +85,9 @@ Enum:
   - `BASE_STATION` — базовая станция (узел)
   - `SATELLITE` — спутник (узел)
   - `EQUIPMENT` — прочее оборудование (узел)
+  - `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE` — офлайн / mesh / транзакции (узлы)
+
+Иных значений `NetworkElementType` в схеме нет (расширенная топология и отдельные типы кабелей AERIAL/INDOOR сняты).
 
 Правило “underground vs submarine”:
 

@@ -25,11 +25,6 @@ type CircuitOpts = {
   failureThreshold?: number;
   windowMs?: number;
   cooldownMs?: number;
-  /**
-   * Не увеличивать счётчик ошибок цепи для этих HTTP-статусов (например 429 от Nominatim —
-   * клиенту всё равно нужно вернуть 429 отдельно в route).
-   */
-  treatAsNeutral?: number[];
 };
 
 function getState(key: string): CircuitState {
@@ -98,10 +93,7 @@ export async function circuitFetch(
     if (res.ok) {
       recordSuccess(key);
     } else {
-      const neutral = opts.treatAsNeutral?.includes(res.status) ?? false;
-      if (!neutral) {
-        recordFailure(key, windowMs, failureThreshold, cooldownMs);
-      }
+      recordFailure(key, windowMs, failureThreshold, cooldownMs);
     }
     return res;
   } catch (err) {

@@ -6,8 +6,8 @@
   "scripts": {
     "postinstall": "prisma generate",
     "dev": "next dev --hostname 0.0.0.0",
-    "dev:clean": "node scripts/clean-next.mjs && next dev",
-    "dev:turbo": "next dev --turbo",
+    "dev:clean": "node scripts/clean-next.mjs && next dev --hostname 0.0.0.0",
+    "dev:turbo": "next dev --hostname 0.0.0.0 --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -15,9 +15,11 @@
     "format:write": "prettier . --write",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy",
+    "prisma:sync": "prisma migrate deploy && prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "db:seed": "node prisma/seed.mjs",
+    "db:enum-inspect": "node scripts/enum-network-element-inspect.mjs",
     "db:seed-belarus": "node scripts/seed-belarus-proposal.mjs",
     "scripts:sync-cables": "node scripts/sync-submarine-cables.mjs",
     "scripts:sync-satellites": "node scripts/sync-satellites.mjs",
@@ -30,7 +32,8 @@
     "test:globe-orient": "node scripts/test-globe-orient-roundtrip.mjs",
     "ops:rollback-drill": "node scripts/rollback-drill.mjs",
     "scripts:smoke-network-extent": "node scripts/smoke-network-data-extent.mjs",
-    "scripts:sync-news": "node scripts/sync-news.mjs"
+    "scripts:sync-news": "node scripts/sync-news.mjs",
+    "scripts:sync-news-db": "tsx scripts/sync-news-db.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
@@ -60,6 +63,7 @@
     "eslint-config-next": "^15.5.0",
     "prettier": "^3.5.3",
     "prisma": "^6.4.1",
+    "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   },
   "prisma": {

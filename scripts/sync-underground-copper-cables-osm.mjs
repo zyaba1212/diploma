@@ -174,12 +174,6 @@ async function main() {
   // Overpass `limit` support varies; we enforce limit in JS.
   const ways = elements.filter((e) => e.type === "way");
   console.log(`Overpass returned ways: ${ways.length}`);
-  if (ways.length === 0) {
-    console.warn(
-      "OSM: zero telecom copper cable ways in bbox. Tags man_made=cable + telecom:medium=copper are sparse in OSM; " +
-        "try a larger --bbox or another region. Fallback: --fallback-reclassify-fiber (see seed env).",
-    );
-  }
 
   const upserts = [];
   for (const way of ways.slice(0, limit)) {

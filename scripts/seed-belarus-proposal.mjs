@@ -26,7 +26,7 @@ const DESCRIPTION = [
 function nodePayload(type, name, lat, lng) {
   return {
     type,
-    scope: 'LOCAL',
+    scope: 'GLOBAL',
     name,
     lat,
     lng,
@@ -38,7 +38,7 @@ function nodePayload(type, name, lat, lng) {
 function cablePayload(type, name, startLat, startLng, endLat, endLng) {
   return {
     type,
-    scope: 'LOCAL',
+    scope: 'GLOBAL',
     name,
     lat: startLat,
     lng: startLng,
@@ -155,39 +155,21 @@ function buildActions() {
   return rows;
 }
 
-const PROPOSAL_TITLE =
-  'Устойчивая сеть транзакций Беларуси в условиях отсутствия интернета';
-
 async function main() {
   const votingEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   const submittedAt = new Date();
-
-  const existing = await prisma.proposal.findFirst({
-    where: { title: PROPOSAL_TITLE },
-    select: { id: true },
-  });
-
-  if (existing) {
-    await prisma.proposal.update({
-      where: { id: existing.id },
-      data: { pinned: true },
-    });
-    console.log('Belarus proposal already exists; set pinned=true.', existing.id);
-    return;
-  }
 
   const actionTemplates = buildActions();
 
   const proposal = await prisma.proposal.create({
     data: {
-      scope: 'LOCAL',
+      scope: 'GLOBAL',
       authorPubkey: SEED_AUTHOR,
       status: 'SUBMITTED',
-      title: PROPOSAL_TITLE,
+      title: 'Устойчивая сеть транзакций Беларуси в условиях отсутствия интернета',
       description: DESCRIPTION,
       submittedAt,
       votingEndsAt,
-      pinned: true,
       actions: {
         createMany: {
           data: actionTemplates.map((a) => ({
@@ -197,7 +179,7 @@ async function main() {
         },
       },
     },
-    select: { id: true, title: true, status: true, submittedAt: true, votingEndsAt: true, pinned: true },
+    select: { id: true, title: true, status: true, submittedAt: true, votingEndsAt: true },
   });
 
   const actionCount = await prisma.changeAction.count({ where: { proposalId: proposal.id } });

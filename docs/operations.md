@@ -90,7 +90,8 @@ npm run test:proposals-stage8
 
 ### Новости RSS → `NewsCache`
 
-- `GET /api/news` **только** отдаёт записи из PostgreSQL (`NewsCache`), без загрузки RSS в hot path.
+- `GET /api/news` **только** отдаёт записи из PostgreSQL (`NewsCache`), без загрузки RSS в hot path. Опционально: **`?days=N`** — только записи с `publishedAt` не старше N календарных суток (страница `/news` запрашивает `days=3`).
+- Прямая синхронизация RSS → БД **без** запущенного Next.js: `npm run scripts:sync-news-db` ([`scripts/sync-news-db.ts`](../scripts/sync-news-db.ts), нужен `DATABASE_URL` в `.env` / `.env.local`).
 - Синхронизация источников: `src/lib/news/syncFeeds.ts`, вызов из защищённого endpoint:
   - `POST /api/cron/news-sync` или `GET /api/cron/news-sync`
   - заголовок `Authorization: Bearer <CRON_SECRET>` **или** query `?secret=<CRON_SECRET>` (query слабее, не логировать URL с секретом).

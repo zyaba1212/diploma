@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  /** Dev: разрешить запросы к /_next/* с другого origin (например туннель z96a.xyz → localhost). */
+  allowedDevOrigins: ['z96a.xyz', 'www.z96a.xyz'],
   experimental: {
     // Next.js devtool segment explorer иногда ломает React Client Manifest в dev-режиме,
     // из-за чего страница может падать на SSR/pre-render и отдавать 500 (см. /cabinet логи).
@@ -13,6 +15,12 @@ const nextConfig = {
    */
   webpack: (config, { dev }) => {
     if (dev) {
+      /**
+       * Windows / антивирус: filesystem cache webpack (`PackFileCacheStrategy`) даёт ENOENT на
+       * `.next/cache/webpack/**.pack.gz` и рассинхрон runtime ↔ чанки (`Cannot find module './NNNN.js'`).
+       * In-memory cache в dev убирает дисковый pack без полного отключения кэширования.
+       */
+      config.cache = { type: 'memory' };
       config.watchOptions = {
         ...config.watchOptions,
         aggregateTimeout: 600,

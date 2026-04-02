@@ -14,7 +14,6 @@ type ProposalDTO = {
   status: string;
   title: string | null;
   description: string | null;
-  pinned?: boolean;
   createdAt: string;
   votingEndsAt?: string | null;
 };
@@ -161,7 +160,7 @@ export default function NetworksPage() {
         </h1>
         <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 28 }}>
           Предложения пользователей по построению устойчивой сетевой инфраструктуры.
-          Голосуйте за лучшие решения! Референсная топология по Республике Беларусь закреплена вверху списка.
+          Голосуйте за лучшие решения!
         </p>
 
         {loading && <p style={{ color: 'var(--muted)' }}>Загрузка…</p>}
@@ -190,24 +189,8 @@ export default function NetworksPage() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: 0 }}>
                       {p.title || 'Без названия'}
-                      {p.pinned ? (
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.06em',
-                            color: '#a78bfa',
-                            border: '1px solid rgba(167, 139, 250, 0.45)',
-                            borderRadius: 6,
-                            padding: '2px 8px',
-                          }}
-                        >
-                          Закреплено
-                        </span>
-                      ) : null}
                     </h2>
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
                       {usernames[p.authorPubkey] || p.authorPubkey.slice(0, 8) + '…'}
@@ -324,6 +307,12 @@ export default function NetworksPage() {
             </Link>
           </div>
         )}
+
+        <div style={{ marginTop: 32, textAlign: 'center' }}>
+          <Link href="/" style={{ color: '#8ab4f8', textDecoration: 'none', fontSize: 14 }}>
+            ← На главную
+          </Link>
+        </div>
       </div>
 
       <style>{`

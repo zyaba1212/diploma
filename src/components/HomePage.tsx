@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 
 const gradientText: CSSProperties = {
   background: 'linear-gradient(120deg, #a78bfa 0%, #7aa2ff 45%, #38bdf8 100%)',
@@ -42,39 +42,6 @@ const featureCards = [
     description: 'Лента новостей о технологиях и телекоммуникациях.',
   },
 ] as const;
-
-/** Ссылка на закреплённое предложение с топологией по РБ (первый в списке API после сида). */
-function BelarusReferenceLink() {
-  const [href, setHref] = useState('/networks');
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/proposals?status=SUBMITTED,ACCEPTED,APPLIED&limit=1')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: { id?: string }[]) => {
-        if (!cancelled && list?.[0]?.id) setHref(`/networks/${list[0].id}`);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return (
-    <Link
-      href={href}
-      style={{
-        display: 'inline-block',
-        marginTop: 14,
-        fontSize: 14,
-        fontWeight: 600,
-        color: '#8ab4f8',
-        textDecoration: 'none',
-        borderBottom: '1px solid rgba(120, 160, 255, 0.35)',
-      }}
-    >
-      Референсная сеть по Беларуси в разделе «Предложения» →
-    </Link>
-  );
-}
 
 function FeatureCard({
   href,
@@ -178,7 +145,7 @@ export function HomePage() {
             }}
           >
             <span style={gradientText}>
-              Архитектура систем транзакций в условиях частичного отсутствия сетевого соединения
+              Архитектура систем транзакций в условиях частичного отсутствия интернета
             </span>
           </h1>
           <p
@@ -238,16 +205,13 @@ export function HomePage() {
               Решение
             </h2>
             <p style={{ fontSize: 15, lineHeight: 1.65, margin: 0, color: 'rgba(232, 236, 255, 0.92)' }}>
-              На платформе разложена в данных{' '}
-              <strong style={{ color: 'var(--text)' }}>референсная топология в границах Республики Беларусь</strong>:
-              узлы <strong style={{ color: 'var(--text)' }}>mesh</strong>, шлюзы{' '}
+              Проект показывает отказоустойчивую архитектуру:{' '}
+              <strong style={{ color: 'var(--text)' }}>mesh-сети</strong>, ретрансляция через{' '}
               <strong style={{ color: 'var(--text)' }}>2G/SMS</strong>,{' '}
-              <strong style={{ color: 'var(--text)' }}>офлайн-очереди</strong> и{' '}
-              <strong style={{ color: 'var(--text)' }}>VSAT</strong>, подкреплённые подземными магистралями между
-              областными центрами — чтобы платежи не зависали при деградации интернета. Предложение закреплено вверху
-              списка «Предложенные сети».
+              <strong style={{ color: 'var(--text)' }}>очереди офлайн-транзакций</strong> и резерв через{' '}
+              <strong style={{ color: 'var(--text)' }}>VSAT</strong> — чтобы платежи не зависали при обрыве
+              интернета.
             </p>
-            <BelarusReferenceLink />
           </section>
         </div>
 
@@ -277,6 +241,12 @@ export function HomePage() {
             ))}
           </div>
         </section>
+
+        <p style={{ textAlign: 'center', marginTop: 28, marginBottom: 0, fontSize: 14, color: 'var(--muted)' }}>
+          <Link href="/about" style={{ color: '#8ab4f8', textDecoration: 'none', fontWeight: 600 }}>
+            О проекте и авторе &rarr;
+          </Link>
+        </p>
       </div>
       <style
         dangerouslySetInnerHTML={{

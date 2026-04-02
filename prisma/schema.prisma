@@ -132,16 +132,12 @@ model Proposal {
 
   votingEndsAt DateTime?
 
-  /// Показывать вверху списка предложений (референсный кейс диплома и т.п.).
-  pinned     Boolean  @default(false)
-
   actions ChangeAction[]
   votes   Vote[]
 
   @@index([authorPubkey, status])
   @@index([status, createdAt])
   @@index([authorPubkey, status, createdAt])
-  @@index([pinned, createdAt])
   @@index([onChainTxSignature])
   @@index([onChainSubmittedAt])
 

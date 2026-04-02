@@ -132,7 +132,7 @@ export async function GET(req: Request) {
   try {
     const proposals = await prisma.proposal.findMany({
       where,
-      orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
+      orderBy: { createdAt: 'desc' },
       skip: offset,
       take: limit,
       select: {
@@ -142,7 +142,6 @@ export async function GET(req: Request) {
         status: true,
         title: true,
         description: true,
-        pinned: true,
         createdAt: true,
         updatedAt: true,
         submittedAt: true,

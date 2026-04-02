@@ -8,18 +8,10 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
 import { EQUIPMENT_FACTORIES, NODE_VISUALS, CABLE_COLORS, createSatelliteObject } from '@/lib/three/factories';
-import { getFrontGlobeCenterLatLng, syncGlobeToMapCenter } from '@/lib/three/globeMapSync';
-import { latLngToVec3, makeTextMesh, disposeThreeObject } from '@/lib/three/utils';
+import { latLngToVec3, orientGlobeGroupCenterFromLatLng, computeGlobeCenterLatLng, makeTextMesh, disposeThreeObject } from '@/lib/three/utils';
 import { WORLD_LABELS } from '@/lib/three/labels';
 import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality';
 import { disposeEarthTextures, loadEarthTextures } from '@/lib/loadEarthTextures';
-import {
-  GLOBE_SCENE_BACKGROUND_HEX,
-  GLOBE_DEFAULT_CENTER,
-  applyLoadedEarthTextures,
-  updateGlobeFrontLabelsVisibility,
-  type GlobeLabelCandidate,
-} from '@/lib/three/globeAppearance';
 import { Button } from '@/components/ui/Button';
 
 import type { NetworkResponseDTO } from '@/lib/types';
@@ -44,8 +36,6 @@ type SandboxElement = {
 type ViewMode = 'MAP_2D' | 'GLOBE_3D';
 
 type SearchResult = { lat: string; lon: string; display_name?: string };
-
-const DEG2RAD = Math.PI / 180;
 
 const ELEMENT_TYPES: { category: string; types: { type: ElementType; label: string; color?: string }[] }[] = [
   {
@@ -112,8 +102,6 @@ export default function SandboxPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [mapZoom, setMapZoom] = useState(6);
-  /** Ref на карту не триггерит ре-рендер; без state D-pad не появлялся после init Leaflet. */
-  const [map2DReady, setMap2DReady] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
@@ -136,10 +124,7 @@ export default function SandboxPage() {
   const cableFromIdRef = useRef(cableFromId);
   cableFromIdRef.current = cableFromId;
 
-  const savedCenterRef = useRef<{ lat: number; lng: number }>({
-    lat: GLOBE_DEFAULT_CENTER.lat,
-    lng: GLOBE_DEFAULT_CENTER.lng,
-  });
+  const savedCenterRef = useRef<{ lat: number; lng: number }>({ lat: 53.9, lng: 27.56 });
 
   // 3D refs
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -149,7 +134,6 @@ export default function SandboxPage() {
   const sandboxGroupRef = useRef<THREE.Group | null>(null);
   const threeInitRef = useRef(false);
   const animFrameRef = useRef(0);
-  const worldLabelCandidatesRef = useRef<GlobeLabelCandidate[]>([]);
 
   useEffect(() => {
     if (!showGlobalNetwork) { setNetwork(null); return; }
@@ -180,7 +164,7 @@ export default function SandboxPage() {
     if (viewMode === 'MAP_2D' && mapInstanceRef.current) {
       mapInstanceRef.current.setView([lat, lng], 12);
     } else if (viewMode === 'GLOBE_3D' && globeGroupRef.current) {
-      syncGlobeToMapCenter(globeGroupRef.current, lat, lng);
+      orientGlobeGroupCenterFromLatLng(globeGroupRef.current, lat, lng);
     }
     setSearchQuery('');
     setSearchResults([]);
@@ -286,15 +270,10 @@ export default function SandboxPage() {
       });
 
       mapInstanceRef.current = map;
-      map.whenReady(() => {
-        if (cancelled) return;
-        setMap2DReady(true);
-      });
     })();
 
     return () => {
       cancelled = true;
-      setMap2DReady(false);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -346,7 +325,7 @@ export default function SandboxPage() {
     const mount = threeContainerRef.current;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(GLOBE_SCENE_BACKGROUND_HEX);
+    scene.background = new THREE.Color(0x060a18);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 2000);
@@ -409,45 +388,41 @@ export default function SandboxPage() {
     globeGroup.add(sandboxGroup);
     scene.add(globeGroup);
 
-    // Те же географические подписи, что на «Глобальной сети» (WORLD_LABELS).
-    const worldLabelCandidates: GlobeLabelCandidate[] = [];
+    // Add world labels
+    const labelSprites: THREE.Object3D[] = [];
     for (const wl of WORLD_LABELS) {
       const labelR = wl.kind === 'water' ? 1.001 : 1.018;
       const pos = latLngToVec3(wl.lat, wl.lng, labelR);
       if (!pos) continue;
       const labelColor = wl.kind === 'water' ? '#80e0ff' : wl.kind === 'city' ? '#b0d4ff' : '#ffffff';
       const mesh = makeTextMesh(wl.text, pos, { color: labelColor, fontSize: wl.fontSize, kind: wl.kind });
-      mesh.visible = false;
       globeGroup.add(mesh);
-      const latRad = wl.lat * DEG2RAD;
-      const lngRad = wl.lng * DEG2RAD;
-      worldLabelCandidates.push({
-        sprite: mesh,
-        latRad,
-        lngRad,
-        sinLat: Math.sin(latRad),
-        cosLat: Math.cos(latRad),
-      });
+      labelSprites.push(mesh);
     }
-    worldLabelCandidatesRef.current = worldLabelCandidates;
 
     const c = savedCenterRef.current;
-    syncGlobeToMapCenter(globeGroup, c.lat, c.lng);
+    orientGlobeGroupCenterFromLatLng(globeGroup, c.lat, c.lng);
 
     loadEarthTextures(renderer).then((set) => {
       if (!set) return;
-      applyLoadedEarthTextures(
-        globeGroup.children[0] as THREE.Mesh<
-          THREE.BufferGeometry,
-          THREE.MeshPhongMaterial | THREE.MeshStandardMaterial
-        >,
-        globeGroup.children[1] as THREE.Mesh<
-          THREE.BufferGeometry,
-          THREE.MeshPhongMaterial | THREE.MeshStandardMaterial
-        >,
-        set,
-        materialMode,
-      );
+      let earthMat: THREE.Material;
+      if (materialMode === 'standard') {
+        earthMat = new THREE.MeshStandardMaterial({
+          map: set.color, normalMap: set.normal, normalScale: new THREE.Vector2(0.055, 0.055),
+          roughness: 0.62, metalness: 0.06, emissive: new THREE.Color(0x0b2d55), emissiveIntensity: 0.42,
+        });
+      } else {
+        earthMat = new THREE.MeshPhongMaterial({
+          map: set.color, normalMap: set.normal, normalScale: new THREE.Vector2(0.04, 0.04),
+          shininess: 15, specular: new THREE.Color(0x2f3b62), emissive: new THREE.Color(0x0e3a6a), emissiveIntensity: 0.35,
+        });
+      }
+      (globeGroup.children[0] as THREE.Mesh).material = earthMat;
+      if (set.clouds) {
+        (globeGroup.children[1] as THREE.Mesh).material = new THREE.MeshPhongMaterial({
+          map: set.clouds, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide,
+        });
+      }
     });
 
     // Mouse drag rotation
@@ -540,7 +515,14 @@ export default function SandboxPage() {
 
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
-      updateGlobeFrontLabelsVisibility(worldLabelCandidatesRef.current, globeGroup, camera.position.z);
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      for (const sp of labelSprites) {
+        const worldPos = new THREE.Vector3();
+        sp.getWorldPosition(worldPos);
+        const toLabel = worldPos.clone().sub(camera.position).normalize();
+        sp.visible = camDir.dot(toLabel) > 0.15;
+      }
       renderer.render(scene, camera);
     };
     animate();
@@ -564,8 +546,6 @@ export default function SandboxPage() {
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
       threeInitRef.current = false;
-      globeGroupRef.current = null;
-      worldLabelCandidatesRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
@@ -704,9 +684,8 @@ export default function SandboxPage() {
         setSaving(false);
         return;
       }
-      // Must match `src/app/api/proposals/[id]/actions/route.ts` (same as /propose).
-      const actionMessage = `diploma-z96a action:add:${proposal.id}`;
-      const encoded = new TextEncoder().encode(actionMessage);
+      const message = `proposal:${proposal.id}\nauthor:${authorPubkey}\nts:${new Date().toISOString()}`;
+      const encoded = new TextEncoder().encode(message);
       const sig = await signMessage(encoded);
       const sigBase58 = bs58.encode(sig);
 
@@ -721,26 +700,19 @@ export default function SandboxPage() {
             payload.path = [{ lat: fromEl.lat, lng: fromEl.lng }, { lat: toEl.lat, lng: toEl.lng }];
           }
         }
-        const aRes = await fetch(`/api/proposals/${proposal.id}/actions`, {
+        await fetch(`/api/proposals/${proposal.id}/actions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ actionType: 'CREATE', elementPayload: payload, authorPubkey, signature: sigBase58 }),
         });
-        if (!aRes.ok) {
-          const errJson = (await aRes.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(errJson?.error || `Не удалось добавить действие: HTTP ${aRes.status}`);
-        }
       }
 
-      const submitRes = await fetch(`/api/proposals/${proposal.id}/submit-draft`, {
+      // Auto-submit to make it appear in Proposals page
+      await fetch(`/api/proposals/${proposal.id}/submit-draft`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ authorPubkey }),
       });
-      if (!submitRes.ok) {
-        const errJson = (await submitRes.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(errJson?.error || `Не удалось отправить на голосование: HTTP ${submitRes.status}`);
-      }
 
       setSaveSuccess(`Предложение отправлено на голосование! Перейдите в "Предложения" для просмотра.`);
       setShowSaveModal(false);
@@ -918,7 +890,7 @@ export default function SandboxPage() {
         <div style={{ marginTop: 8, display: 'flex', gap: 4 }}>
           <Button onClick={() => {
             if (globeGroupRef.current) {
-              const ctr = getFrontGlobeCenterLatLng(globeGroupRef.current);
+              const ctr = computeGlobeCenterLatLng(globeGroupRef.current);
               if (ctr) savedCenterRef.current = ctr;
             }
             setViewMode('MAP_2D');
@@ -1016,7 +988,7 @@ export default function SandboxPage() {
           </div>
         )}
 
-        {viewMode === 'MAP_2D' && map2DReady && (
+        {viewMode === 'MAP_2D' && mapInstanceRef.current && (
           <div style={{ position: 'absolute', bottom: 70, left: 12, zIndex: 1000, display: 'grid', gridTemplateColumns: 'repeat(3, 28px)', gap: 2 }}>
             {[
               { label: '↖', dx: -100, dy: -100 },

@@ -55,30 +55,32 @@ NEXT_PUBLIC_EARTH_TEXTURE_BASE=/textures/earth/
 
 ## Качество и производительность
 
-- Сегменты сферы по умолчанию: **128×128** (раньше 96; для `NEXT_PUBLIC_EARTH_QUALITY=high` — **160**).
-- Анизотропная фильтрация текстур до возможностей GPU (`renderer.capabilities.getMaxAnisotropy()`).
-- При слабом железе можно уменьшить разрешение текстур (локальные копии 1024px) или сегменты сферы в коде.
+- **По умолчанию (без `.env`):** сфера **224×224** сегментов, материал **`MeshStandardMaterial`** (PBR-lite); фон сцены тёмный — `GLOBE_SCENE_BACKGROUND_HEX` в `globeAppearance.ts`.
+- **`NEXT_PUBLIC_EARTH_QUALITY=high`** — **256** сегментов (максимум в коде), материал Standard; **`NEXT_PUBLIC_EARTH_SPHERE_SEGMENTS` при этом не читается** (чтобы старое значение в `.env` не «ломало» high). Max DPR рендера по умолчанию **3** (см. `NEXT_PUBLIC_EARTH_MAX_PIXEL_RATIO`).
+- **`NEXT_PUBLIC_EARTH_QUALITY=low`** — **96** сегментов + **Phong** — для слабых GPU.
+- Если **`NEXT_PUBLIC_EARTH_QUALITY` не задан**, можно задать только `NEXT_PUBLIC_EARTH_SPHERE_SEGMENTS` (32–256) и при необходимости `NEXT_PUBLIC_EARTH_MATERIAL`.
+- Анизотропная фильтрация текстур до возможностей GPU (`renderer.capabilities.getMaxAnisotropy()`), явный clamp по краям UV.
+- При слабом железе: `low`, или меньше сегментов / текстур 1024px локально.
 
 ## Честно: это не «максимальное» качество планеты
 
-Базово используется **набор примеров three.js** (`earth_*_2048.jpg`, облака 1024px) с **MeshPhongMaterial**. Это хороший **учебный/демо** уровень.
+Базово используется **набор примеров three.js** (`earth_*_2048.jpg`, облака 1024px). По умолчанию ренер идёт через **`MeshStandardMaterial`** — заметно приятнее освещение, чем чистый Phong на тех же текстурах.
 
-### Как поднять качество в этом проекте
+### Как поднять качество ещё выше
 
-1. **Пресет «high»** (рекомендуется одной строкой в `.env.local`):
+1. **Пресет «high»** (ещё более гладкая сфера):
 
 ```env
 NEXT_PUBLIC_EARTH_QUALITY=high
 ```
 
-Включает: сферу **160×160** сегментов и **`MeshStandardMaterial`** (PBR-lite, без env-карты), чуть сильнее подсветка.
-
 2. **Тонкая настройка** (все переменные опциональны):
 
 | Переменная | Назначение |
 |------------|------------|
-| `NEXT_PUBLIC_EARTH_SPHERE_SEGMENTS` | Явно задать сегменты сферы (32–256), перекрывает сегменты из пресета `high`. |
-| `NEXT_PUBLIC_EARTH_MATERIAL` | `phong` (классика three.js) или `standard` (более естественный свет). |
+| `NEXT_PUBLIC_EARTH_SPHERE_SEGMENTS` | Сегменты (32–256), **только если `NEXT_PUBLIC_EARTH_QUALITY` не задан**; иначе пресет quality главнее. |
+| `NEXT_PUBLIC_EARTH_MATERIAL` | `phong` или `standard` — **только если quality не задан**; при `high`/`low` материал фиксируется пресетом. |
+| `NEXT_PUBLIC_EARTH_MAX_PIXEL_RATIO` | Верхний предел `devicePixelRatio` для WebGL (1–4); при `high` по умолчанию 3. |
 | `NEXT_PUBLIC_EARTH_TEXTURE_BASE` | Базовый URL или `/textures/earth/` для локальных файлов. |
 | `NEXT_PUBLIC_EARTH_MAP_FILE` | Имя файла цветовой карты (по умолчанию `earth_atmos_2048.jpg`). |
 | `NEXT_PUBLIC_EARTH_NORMAL_FILE` | Нормаль (по умолчанию `earth_normal_2048.jpg`). |
@@ -87,7 +89,7 @@ NEXT_PUBLIC_EARTH_QUALITY=high
 
 3. **Текстуры выше 2048** — положите в `public/textures/earth/` (или свой CDN) и укажите имена через переменные выше; для **NASA Visible Earth** и др. проверяйте условия использования. Полный PBR с **env map** и отражениями океана в коде не включён (можно добавить позже).
 
-4. **Слабое железо** — уменьшите сегменты, например `NEXT_PUBLIC_EARTH_SPHERE_SEGMENTS=64`.
+4. **Слабое железо** — `NEXT_PUBLIC_EARTH_QUALITY=low` или `NEXT_PUBLIC_EARTH_SPHERE_SEGMENTS=64`.
 
 ### Верхняя планка индустрии
 

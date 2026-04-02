@@ -7,17 +7,10 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import Link from 'next/link';
 import { EQUIPMENT_FACTORIES, NODE_VISUALS, CABLE_COLORS, TYPE_LABELS_RU, createSatelliteObject } from '@/lib/three/factories';
-import { latLngToVec3, orientGlobeGroupCenterFromLatLng, makeTextMesh, disposeThreeObject, computeGlobeCenterLatLng } from '@/lib/three/utils';
-import { WORLD_LABELS } from '@/lib/three/labels';
+import { latLngToVec3, orientGlobeGroupCenterFromLatLng, makeTextSprite, makeTextMesh, disposeThreeObject, computeGlobeCenterLatLng } from '@/lib/three/utils';
+import { WORLD_LABELS, LABEL_STYLE } from '@/lib/three/labels';
 import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality';
 import { loadEarthTextures } from '@/lib/loadEarthTextures';
-import {
-  GLOBE_SCENE_BACKGROUND_HEX,
-  GLOBE_DEFAULT_CENTER,
-  applyLoadedEarthTextures,
-  updateGlobeFrontLabelsVisibility,
-  type GlobeLabelCandidate,
-} from '@/lib/three/globeAppearance';
 import { Button } from '@/components/ui/Button';
 import type L from 'leaflet';
 
@@ -67,6 +60,10 @@ export default function ProposalViewPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [locationLabel, setLocationLabel] = useState('Определяем локацию…');
+  const [userLat, setUserLat] = useState<number | null>(null);
+  const [userLng, setUserLng] = useState<number | null>(null);
+
   const threeContainerRef = useRef<HTMLDivElement>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -79,12 +76,48 @@ export default function ProposalViewPage() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const leafletRef = useRef<typeof import('leaflet') | null>(null);
   const zoomLevelRef = useRef(3);
-  const savedCenterRef = useRef<{ lat: number; lng: number }>({
-    lat: GLOBE_DEFAULT_CENTER.lat,
-    lng: GLOBE_DEFAULT_CENTER.lng,
-  });
+  const savedCenterRef = useRef<{ lat: number; lng: number }>({ lat: 53.5, lng: 28 });
 
-  const labelCandidatesRef = useRef<GlobeLabelCandidate[]>([]);
+  const labelCandidatesRef = useRef<Array<{
+    obj: THREE.Object3D;
+    latRad: number;
+    lngRad: number;
+    sinLat: number;
+    cosLat: number;
+  }>>([]);
+
+  // Geolocation
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationLabel('Геолокация недоступна');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setUserLat(lat);
+        setUserLng(lng);
+        fetch(`/api/geocode/reverse?lat=${lat}&lon=${lng}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => {
+            if (d) {
+              const addr = d.address ?? {};
+              const city = addr.city || addr.town || addr.village || addr.hamlet;
+              const region = addr.state || addr.region;
+              const country = addr.country;
+              const parts = [city, region, country].filter(Boolean);
+              setLocationLabel(parts.length ? parts.join(', ') : d.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+            } else {
+              setLocationLabel(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+            }
+          })
+          .catch(() => setLocationLabel(`${lat.toFixed(4)}, ${lng.toFixed(4)}`));
+      },
+      () => setLocationLabel('Геолокация недоступна (требуется HTTPS или разрешение браузера)'),
+      { enableHighAccuracy: false, timeout: 8000 },
+    );
+  }, []);
 
   // Load proposal
   useEffect(() => {
@@ -166,12 +199,9 @@ export default function ProposalViewPage() {
 
   const getGlobeCenterLatLng = useCallback((): { lat: number; lng: number } => {
     if (globeGroupRef.current) {
-      return computeGlobeCenterLatLng(globeGroupRef.current) ?? {
-        lat: GLOBE_DEFAULT_CENTER.lat,
-        lng: GLOBE_DEFAULT_CENTER.lng,
-      };
+      return computeGlobeCenterLatLng(globeGroupRef.current) ?? { lat: 53.5, lng: 28 };
     }
-    return { lat: GLOBE_DEFAULT_CENTER.lat, lng: GLOBE_DEFAULT_CENTER.lng };
+    return { lat: 53.5, lng: 28 };
   }, []);
 
   const handleToggleView = useCallback((target: ViewMode) => {
@@ -197,7 +227,7 @@ export default function ProposalViewPage() {
     const mount = threeContainerRef.current;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(GLOBE_SCENE_BACKGROUND_HEX);
+    scene.background = new THREE.Color(0x060a18);
 
     const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 2000);
     camera.position.set(0, 0, zoomLevelRef.current);
@@ -254,18 +284,22 @@ export default function ProposalViewPage() {
 
     loadEarthTextures(renderer).then((set) => {
       if (!set) return;
-      applyLoadedEarthTextures(
-        globeGroup.children[0] as THREE.Mesh<
-          THREE.BufferGeometry,
-          THREE.MeshPhongMaterial | THREE.MeshStandardMaterial
-        >,
-        globeGroup.children[1] as THREE.Mesh<
-          THREE.BufferGeometry,
-          THREE.MeshPhongMaterial | THREE.MeshStandardMaterial
-        >,
-        set,
-        materialMode,
-      );
+      let earthMat: THREE.Material;
+      if (materialMode === 'standard') {
+        earthMat = new THREE.MeshStandardMaterial({
+          map: set.color, normalMap: set.normal, normalScale: new THREE.Vector2(0.055, 0.055),
+          roughness: 0.62, metalness: 0.06, emissive: new THREE.Color(0x0b2d55), emissiveIntensity: 0.42,
+        });
+      } else {
+        earthMat = new THREE.MeshPhongMaterial({
+          map: set.color, normalMap: set.normal, normalScale: new THREE.Vector2(0.04, 0.04),
+          shininess: 15, specular: new THREE.Color(0x2f3b62), emissive: new THREE.Color(0x0e3a6a), emissiveIntensity: 0.35,
+        });
+      }
+      (globeGroup.children[0] as THREE.Mesh).material = earthMat;
+      if (set.clouds) {
+        (globeGroup.children[1] as THREE.Mesh).material = new THREE.MeshPhongMaterial({ map: set.clouds, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+      }
     });
 
     const clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0.15);
@@ -317,6 +351,17 @@ export default function ProposalViewPage() {
         marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
         marker.userData = { elName: el.name, elType: type };
         networkGroup.add(marker);
+
+        const labelText = (el.name as string)?.trim() || TYPE_LABELS_RU[type] || type;
+        const sprite = makeTextSprite(labelText, { background: 'rgba(0,0,0,0.55)', color: '#eaf2ff', fontSize: 18 });
+        sprite.position.copy(pos);
+        sprite.position.add(normal.clone().multiplyScalar(0.03 + visual.size * 0.4));
+        sprite.visible = false;
+        networkGroup.add(sprite);
+
+        const latRad = (el.lat as number) * DEG2RAD;
+        const lngRad = (el.lng as number) * DEG2RAD;
+        labelCandidatesRef.current.push({ obj: sprite, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
       }
     }
 
@@ -332,7 +377,26 @@ export default function ProposalViewPage() {
 
       const latRad = wl.lat * DEG2RAD;
       const lngRad = wl.lng * DEG2RAD;
-      labelCandidatesRef.current.push({ sprite: mesh, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
+      labelCandidatesRef.current.push({ obj: mesh, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
+    }
+
+    // Satellites (Starlink etc.)
+    const satelliteCount = 60;
+    for (let i = 0; i < satelliteCount; i++) {
+      const lat = (Math.random() - 0.5) * 140;
+      const lng = Math.random() * 360 - 180;
+      const alt = 540 + Math.random() * 20;
+      const visual = NODE_VISUALS['SATELLITE'];
+      if (!visual) continue;
+      const r = 1.0 + alt / 6371;
+      const pos = latLngToVec3(lat, lng, r);
+      if (!pos) continue;
+      const normal = pos.clone().normalize();
+      const sat = createSatelliteObject(visual.size * 0.6, visual.color, visual.emissive);
+      sat.position.copy(pos);
+      sat.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+      sat.userData = { elName: `Starlink-${i + 1}`, elType: 'SATELLITE' };
+      networkGroup.add(sat);
     }
 
     let dragging = false, prevX = 0, prevY = 0;
@@ -424,7 +488,22 @@ export default function ProposalViewPage() {
 
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
-      updateGlobeFrontLabelsVisibility(labelCandidatesRef.current, globeGroup, camera.position.z);
+
+      // Update label visibility based on globe center
+      const center = computeGlobeCenterLatLng(globeGroup) ?? { lat: 53.5, lng: 28 };
+      const cLat = center.lat * DEG2RAD;
+      const cLng = center.lng * DEG2RAD;
+      const sinCLat = Math.sin(cLat);
+      const cosCLat = Math.cos(cLat);
+      const zLvl = camera.position.z;
+      const threshold = zLvl < 1.8 ? 0.4 : zLvl < 2.5 ? 0.55 : 0.85;
+
+      for (const lc of labelCandidatesRef.current) {
+        const dLng = lc.lngRad - cLng;
+        const cosD = sinCLat * lc.sinLat + cosCLat * lc.cosLat * Math.cos(dLng);
+        lc.obj.visible = cosD > threshold;
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -472,6 +551,12 @@ export default function ProposalViewPage() {
 
       map.whenReady(() => {
         map.invalidateSize();
+
+        if (userLat !== null && userLng !== null) {
+          L.circleMarker([userLat, userLng], {
+            radius: 8, color: '#4285f4', fillColor: '#4285f4', fillOpacity: 0.8, weight: 2,
+          }).addTo(map).bindPopup('Ваше местоположение');
+        }
 
         for (const el of proposalElements) {
           const type = el.type as string;
@@ -557,6 +642,15 @@ export default function ProposalViewPage() {
     }
   }, [viewMode]);
 
+  const handleGoToLocation = useCallback(() => {
+    if (userLat === null || userLng === null) return;
+    if (viewMode === 'MAP_2D' && mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo([userLat, userLng], 12);
+    } else if (viewMode === 'GLOBE_3D' && globeGroupRef.current) {
+      orientGlobeGroupCenterFromLatLng(globeGroupRef.current, userLat, userLng);
+    }
+  }, [viewMode, userLat, userLng]);
+
   const timeRemaining = proposal?.votingEndsAt
     ? (() => {
         const diff = new Date(proposal.votingEndsAt!).getTime() - Date.now();
@@ -595,21 +689,24 @@ export default function ProposalViewPage() {
         }
       `}</style>
 
-      {/* 3D/2D View — слой карты ниже Leaflet-панелей; UI поверх (z-index ≥1000). */}
-      {viewMode === 'GLOBE_3D' && (
-        <div
-          ref={threeContainerRef}
-          style={{ width: '100%', height: '100%', willChange: 'transform', position: 'relative', zIndex: 0 }}
-        />
-      )}
+      {/* 3D/2D View */}
+      {viewMode === 'GLOBE_3D' && <div ref={threeContainerRef} style={{ width: '100%', height: '100%', willChange: 'transform' }} />}
+      {viewMode === 'MAP_2D' && <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />}
+
+      {/* Location badge (2D only) */}
       {viewMode === 'MAP_2D' && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-          <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+        <div style={{
+          position: 'absolute', top: 62, left: '50%', transform: 'translateX(-50%)', zIndex: 30,
+          background: 'rgba(10,20,40,0.9)', border: '1px solid rgba(120,160,255,0.2)', borderRadius: 10,
+          padding: '4px 14px', fontSize: 12, color: 'var(--muted)', pointerEvents: 'auto', cursor: userLat !== null ? 'pointer' : 'default',
+          whiteSpace: 'nowrap',
+        }} onClick={handleGoToLocation}>
+          📍 {locationLabel}
         </div>
       )}
 
       {/* Search */}
-      <div className="pv-search-block" style={{ position: 'absolute', top: 62, right: 340, zIndex: 1000, width: 260 }}>
+      <div className="pv-search-block" style={{ position: 'absolute', top: 62, right: 340, zIndex: 30, width: 260 }}>
         <input
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
@@ -631,14 +728,14 @@ export default function ProposalViewPage() {
       </div>
 
       {/* Zoom controls */}
-      <div style={{ position: 'absolute', bottom: 20, left: 12, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ position: 'absolute', bottom: 20, left: 12, zIndex: 30, display: 'flex', flexDirection: 'column', gap: 4 }}>
         <button onClick={() => handleZoom(1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(120,160,255,0.2)', background: 'rgba(10,20,40,0.9)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>+</button>
         <button onClick={() => handleZoom(-1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(120,160,255,0.2)', background: 'rgba(10,20,40,0.9)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>&minus;</button>
       </div>
 
       {/* Navigation arrows (2D only) */}
       {viewMode === 'MAP_2D' && (
-        <div className="pv-nav-block" style={{ position: 'absolute', bottom: 20, left: 56, zIndex: 1000, display: 'grid', gridTemplateColumns: 'repeat(3, 32px)', gridTemplateRows: 'repeat(3, 32px)', gap: 2 }}>
+        <div className="pv-nav-block" style={{ position: 'absolute', bottom: 20, left: 56, zIndex: 30, display: 'grid', gridTemplateColumns: 'repeat(3, 32px)', gridTemplateRows: 'repeat(3, 32px)', gap: 2 }}>
           {(['up-left','up','up-right','left','','right','down-left','down','down-right'] as const).map((dir, i) => (
             dir === '' ? <div key={i} /> :
             <button key={dir} onClick={() => handleNavigate(dir)} style={{
@@ -657,7 +754,7 @@ export default function ProposalViewPage() {
       <div
         className="proposal-info-panel"
         style={{
-          position: 'absolute', right: 12, top: 64, zIndex: 1000,
+          position: 'absolute', right: 12, top: 64, zIndex: 20,
           width: 320, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
           background: 'rgba(10,20,40,0.92)', border: '1px solid rgba(120,160,255,0.2)',
           borderRadius: 14, padding: '18px 20px', backdropFilter: 'blur(8px)',

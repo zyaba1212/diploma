@@ -1,9 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { normalizeLatLng } from '@/lib/geo/normalizeLatLng';
-import { padBounds, type LatLngBounds } from '@/lib/geo/networkBounds';
-import type { BboxTuple } from '@/lib/geo/viewportBbox';
+import { useEffect, useRef } from 'react';
 import type { LatLng, NetworkResponseDTO } from '@/lib/types';
 import type L from 'leaflet';
 
@@ -11,25 +8,19 @@ export function MapView({
   network,
   center,
   initialCenter,
-  autoFitBounds,
+  userLocation,
   onCenterChanged,
   onMapReady,
-  onMapUnmount,
   onZoomChanged,
-  /** Видимая область карты — для загрузки сети по bbox (глобальная сеть). */
-  onViewportChange,
   onError,
 }: {
   network: NetworkResponseDTO | null;
   center?: LatLng | null;
   initialCenter?: LatLng | null;
-  /** When set, map fits this box once per value (e.g. regional OSM + Gold Coast data). */
-  autoFitBounds?: LatLngBounds | null;
+  userLocation?: { lat: number; lng: number; accuracy?: number | null } | null;
   onCenterChanged?: (center: LatLng) => void;
   onMapReady?: (map: L.Map) => void;
-  onMapUnmount?: (center: LatLng) => void;
   onZoomChanged?: (zoom: number) => void;
-  onViewportChange?: (payload: { bbox: BboxTuple; zoom: number }) => void;
   onError?: (msg: string) => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -38,16 +29,11 @@ export function MapView({
   const leafletRef = useRef<typeof import('leaflet') | null>(null);
   const onCenterChangedRef = useRef<typeof onCenterChanged>(onCenterChanged);
   const onMapReadyRef = useRef<typeof onMapReady>(onMapReady);
-  const onMapUnmountRef = useRef<typeof onMapUnmount>(onMapUnmount);
   const onZoomChangedRef = useRef<typeof onZoomChanged>(onZoomChanged);
-  const onViewportChangeRef = useRef<typeof onViewportChange>(onViewportChange);
   const lastSetCenterRef = useRef<LatLng | null>(null);
   const initialCenterRef = useRef<LatLng | null | undefined>(initialCenter);
   const pendingCenterRef = useRef<LatLng | null>(null);
   const onErrorRef = useRef<typeof onError>(onError);
-  const lastAutoFitKeyRef = useRef<string | null>(null);
-  /** Leaflet и layer group создаются асинхронно; без этого сеть могла прийти раньше карты и эффект не повторялся. */
-  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
     initialCenterRef.current = initialCenter;
@@ -66,27 +52,8 @@ export function MapView({
   }, [onMapReady]);
 
   useEffect(() => {
-    onMapUnmountRef.current = onMapUnmount;
-  }, [onMapUnmount]);
-
-  useEffect(() => {
     onZoomChangedRef.current = onZoomChanged;
   }, [onZoomChanged]);
-
-  useEffect(() => {
-    onViewportChangeRef.current = onViewportChange;
-  }, [onViewportChange]);
-
-  /** Раньше onMapUnmount в cleanup useEffect — после layout родителя; вызываем центр до перехода EarthScene. */
-  useLayoutEffect(() => {
-    return () => {
-      const m = mapRef.current;
-      if (m) {
-        const gc = m.getCenter();
-        onMapUnmountRef.current?.(normalizeLatLng(gc.lat, gc.lng));
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -144,32 +111,21 @@ export function MapView({
       group.addTo(map);
       layerRef.current = group;
 
-      const emitViewport = () => {
-        const b = map.getBounds();
-        const bbox: BboxTuple = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
-        onViewportChangeRef.current?.({ bbox, zoom: map.getZoom() });
-      };
-
       const onMoveEnd = () => {
         const c = map.getCenter();
         onCenterChangedRef.current?.({ lat: c.lat, lng: c.lng });
-        emitViewport();
       };
       const onZoomEnd = () => {
         onZoomChangedRef.current?.(map.getZoom());
-        emitViewport();
       };
       map.on('moveend', onMoveEnd);
       map.on('zoomend', onZoomEnd);
       onMoveEnd();
       onZoomEnd();
-
-      if (!cancelled) setMapReady(true);
     })();
 
     return () => {
       cancelled = true;
-      setMapReady(false);
       const m = mapRef.current;
       leafletRef.current = null;
       layerRef.current = null;
@@ -197,34 +153,6 @@ export function MapView({
   }, [center]);
 
   useEffect(() => {
-    if (!autoFitBounds) {
-      lastAutoFitKeyRef.current = null;
-    }
-  }, [autoFitBounds]);
-
-  useEffect(() => {
-    if (!mapReady || !autoFitBounds) return;
-    const map = mapRef.current;
-    const Lmod = leafletRef.current;
-    if (!map || !Lmod) return;
-
-    const padded = padBounds(autoFitBounds);
-    const key = `${padded.minLat.toFixed(5)}:${padded.minLng.toFixed(5)}:${padded.maxLat.toFixed(5)}:${padded.maxLng.toFixed(5)}`;
-    if (lastAutoFitKeyRef.current === key) return;
-    lastAutoFitKeyRef.current = key;
-
-    const sw = Lmod.latLng(padded.minLat, padded.minLng);
-    const ne = Lmod.latLng(padded.maxLat, padded.maxLng);
-    const bounds = Lmod.latLngBounds(sw, ne);
-    if (!bounds.isValid()) return;
-
-    map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16, animate: false });
-    const c = map.getCenter();
-    onCenterChangedRef.current?.(normalizeLatLng(c.lat, c.lng));
-  }, [mapReady, autoFitBounds]);
-
-  useEffect(() => {
-    if (!mapReady) return;
     const L = leafletRef.current;
     const group = layerRef.current;
     if (!L || !group) return;
@@ -242,10 +170,6 @@ export function MapView({
       BASE_STATION: { color: '#ffc3a0', radius: 0.020 * 240 },
       SATELLITE: { color: '#9fe7ff', radius: 0.012 * 240 },
       EQUIPMENT: { color: '#ffffff', radius: 0.010 * 240 },
-      MESH_RELAY: { color: '#00e5ff', radius: 0.014 * 240 },
-      SMS_GATEWAY: { color: '#ffd740', radius: 0.014 * 240 },
-      VSAT_TERMINAL: { color: '#b388ff', radius: 0.016 * 240 },
-      OFFLINE_QUEUE: { color: '#69f0ae', radius: 0.012 * 240 },
     };
 
     if (network) {
@@ -327,7 +251,35 @@ export function MapView({
         }
       }
     }
-  }, [network, mapReady]);
+
+    // 2D user location marker (with optional accuracy circle).
+    if (userLocation && typeof userLocation.lat === 'number' && typeof userLocation.lng === 'number') {
+      const lat = userLocation.lat;
+      const lng = userLocation.lng;
+
+      const accuracy = userLocation.accuracy ?? null;
+      if (typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy > 1) {
+        L.circle([lat, lng], {
+          radius: accuracy,
+          color: '#00c2ff',
+          weight: 1,
+          opacity: 0.55,
+          fillColor: '#00c2ff',
+          fillOpacity: 0.12,
+          dashArray: '4, 4',
+        }).addTo(group);
+      }
+
+      L.circleMarker([lat, lng], {
+        radius: 8,
+        color: '#ffffff',
+        weight: 2,
+        opacity: 0.95,
+        fillColor: '#00c2ff',
+        fillOpacity: 0.85,
+      }).addTo(group);
+    }
+  }, [network, userLocation]);
 
   return <div ref={ref} style={{ height: '100%', width: '100%' }} />;
 }

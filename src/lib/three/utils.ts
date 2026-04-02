@@ -1,39 +1,6 @@
 import * as THREE from 'three';
 import type { LatLng } from '@/lib/types';
 
-/** Углы центра «лицевой» стороны глобуса (ось +Z к камере); для cosd подписей и sync с картой. */
-export type GlobeFrontCenterAngles = {
-  centerLatRad: number;
-  centerLngRad: number;
-  sinCenter: number;
-  cosCenter: number;
-};
-
-const _gfcFront = new THREE.Vector3(0, 0, 1);
-const _gfcLocal = new THREE.Vector3();
-const _gfcInvQuat = new THREE.Quaternion();
-
-/**
- * Заполняет углы центра лицевой стороны без лишних аллокаций (каждый кадр в animate).
- */
-export function computeGlobeFrontCenterAnglesInto(globeGroup: THREE.Group, out: GlobeFrontCenterAngles): boolean {
-  _gfcLocal.copy(_gfcFront).applyQuaternion(_gfcInvQuat.copy(globeGroup.quaternion).invert());
-  const y = Math.max(-1, Math.min(1, _gfcLocal.y));
-  out.centerLatRad = Math.asin(y);
-  out.centerLngRad = Math.atan2(_gfcLocal.z, -_gfcLocal.x) - Math.PI;
-  if (!Number.isFinite(out.centerLatRad) || !Number.isFinite(out.centerLngRad)) return false;
-  out.sinCenter = Math.sin(out.centerLatRad);
-  out.cosCenter = Math.cos(out.centerLatRad);
-  return true;
-}
-
-const _centerLatLngScratch: GlobeFrontCenterAngles = {
-  centerLatRad: 0,
-  centerLngRad: 0,
-  sinCenter: 0,
-  cosCenter: 0,
-};
-
 export function latLngToVec3(lat: number, lng: number, radius: number): THREE.Vector3 | null {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   const phi = (90 - lat) * (Math.PI / 180);
@@ -45,9 +12,12 @@ export function latLngToVec3(lat: number, lng: number, radius: number): THREE.Ve
 }
 
 export function computeGlobeCenterLatLng(globeGroup: THREE.Group): LatLng | null {
-  if (!computeGlobeFrontCenterAnglesInto(globeGroup, _centerLatLngScratch)) return null;
-  const latRad = _centerLatLngScratch.centerLatRad;
-  const lngRad = _centerLatLngScratch.centerLngRad;
+  const front = new THREE.Vector3(0, 0, -1);
+  const local = front.applyQuaternion(globeGroup.quaternion.clone().invert());
+
+  const y = Math.max(-1, Math.min(1, local.y));
+  const latRad = Math.asin(y);
+  const lngRad = Math.atan2(local.z, -local.x) - Math.PI;
 
   const lat = (latRad * 180) / Math.PI;
   let lng = (lngRad * 180) / Math.PI;
@@ -77,7 +47,7 @@ export function orientGlobeGroupCenterFromLatLng(globeGroup: THREE.Group, lat: n
   const localCenterRay = new THREE.Vector3(x, y, z);
   if (localCenterRay.lengthSq() < 1e-12) return;
 
-  const front = new THREE.Vector3(0, 0, 1);
+  const front = new THREE.Vector3(0, 0, -1);
   const q = new THREE.Quaternion().setFromUnitVectors(localCenterRay.normalize(), front);
   globeGroup.quaternion.copy(q);
 }
