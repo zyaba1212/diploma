@@ -1540,3 +1540,19 @@ FilesChanged:
 
 HowToTest:
 - `npm run lint` → «No ESLint warnings or errors»; `npm run build`
+
+## GitHub Actions: validation for Supabase import secrets
+
+Date: 2026-04-02
+
+FilesChanged:
+- `.github/workflows/import-dump-to-supabase.yml`
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- In `Import full SQL dump` step, moved all `SUPABASE_*` values to step `env`.
+- Added explicit preflight checks for missing `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER`, `SUPABASE_DB`, `SUPABASE_PASSWORD`.
+- Switched `psql` flags to use validated env vars, so failures are clear and do not fall back to local socket.
+
+Result:
+- Workflow now fails fast with understandable messages when secrets are missing/misnamed.
