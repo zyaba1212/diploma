@@ -1,0 +1,26 @@
+name: Import dump.sql to Supabase
+
+on:
+  workflow_dispatch:
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Import full SQL dump
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
+        run: |
+          psql \
+            -h "${{ secrets.SUPABASE_HOST }}" \
+            -p "${{ secrets.SUPABASE_PORT }}" \
+            -U "${{ secrets.SUPABASE_USER }}" \
+            -d "${{ secrets.SUPABASE_DB }}" \
+            -v ON_ERROR_STOP=1 \
+            -f db-export/diploma.sql
