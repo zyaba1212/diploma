@@ -1,0 +1,20 @@
+-- Пример ручного жёсткого удаления предложения в PostgreSQL (обход API).
+-- Предпочтительно: DELETE /api/admin/proposals/:id с cookie staff-сессии ADMIN
+-- (см. src/app/api/admin/proposals/[id]/route.ts).
+--
+-- ВАЖНО: не удаляйте предложение в статусе APPLIED, пока не откатите эффекты
+-- на карте сети через POST /api/admin/proposals/:id/force-rollback (иначе
+-- останутся элементы сети без связи с предложением).
+--
+-- Замените YOUR_PROPOSAL_CUID на реальный id (из админки или Prisma Studio).
+
+BEGIN;
+
+DELETE FROM "Vote" WHERE "proposalId" = 'YOUR_PROPOSAL_CUID';
+DELETE FROM "ProposalFeedback" WHERE "proposalId" = 'YOUR_PROPOSAL_CUID';
+DELETE FROM "ModerationDecision" WHERE "proposalId" = 'YOUR_PROPOSAL_CUID';
+DELETE FROM "HistoryEntry" WHERE "proposalId" = 'YOUR_PROPOSAL_CUID';
+DELETE FROM "ChangeAction" WHERE "proposalId" = 'YOUR_PROPOSAL_CUID';
+DELETE FROM "Proposal" WHERE "id" = 'YOUR_PROPOSAL_CUID';
+
+COMMIT;

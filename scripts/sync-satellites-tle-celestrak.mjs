@@ -163,14 +163,14 @@ async function upsertProvider(providerId, scope, group, sourceUrl) {
     where: { id: providerId },
     update: {
       name: `${PROVIDER_NAME_BASE} (${group})`,
-      sourceUrl: `${sourceUrl} (License note: ${PROVIDER_LICENSE_NOTE})`,
+      sourceUrl,
       scope,
     },
     create: {
       id: providerId,
       name: `${PROVIDER_NAME_BASE} (${group})`,
       scope,
-      sourceUrl: `${sourceUrl} (License note: ${PROVIDER_LICENSE_NOTE})`,
+      sourceUrl,
     },
   });
 }

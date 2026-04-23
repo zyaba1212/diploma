@@ -1,6 +1,7 @@
 ---
 description: Общие промпты для агентов A–G — букву выбирает сам агент по роли
-alwaysApply: true
+globs: docs/agents/*-prompts.md
+alwaysApply: false
 ---
 
 # Промпты агентов (A–G): самовыбор буквы

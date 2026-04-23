@@ -47,6 +47,7 @@ async function main() {
   const b1 = await r1.json();
   assert(r1.status === 200, `GET /api/profile status ${r1.status}; body=${JSON.stringify(b1)}`);
   assert(b1.inDatabase === true, 'expected inDatabase=true after auth verify');
+  assert(b1.isBanned === false, 'expected isBanned=false for new user');
   assert(b1.usernameSetAt === null, 'expected usernameSetAt === null right after first login');
   assert(isValidUsername(b1.username), `expected username to be valid; got ${JSON.stringify(b1.username)}`);
 

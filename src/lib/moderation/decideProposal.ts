@@ -9,7 +9,7 @@ import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 import { internalApiError } from '@/lib/apiError';
 import { logApiMetric } from '@/lib/apiOps';
 
-function parseModerators(): Set<string> {
+export function parseModeratorsEnv(): Set<string> {
   const raw = process.env.MODERATOR_PUBKEYS || '';
   // Allowlist is a base58 pubkey list.
   return new Set(
@@ -18,6 +18,15 @@ function parseModerators(): Set<string> {
       .map((s) => s.trim())
       .filter(Boolean),
   );
+}
+
+export async function isModeratorPubkeyAllowed(pubkey: string): Promise<boolean> {
+  if (parseModeratorsEnv().has(pubkey)) return true;
+  const grant = await prisma.moderatorGrant.findFirst({
+    where: { user: { pubkey } },
+    select: { userId: true },
+  });
+  return Boolean(grant);
 }
 
 function normalizeToStatus(value: string): ProposalStatus | null {
@@ -53,7 +62,23 @@ function verifyModeratorSignature(opts: {
   return { ok: true as const };
 }
 
-export async function handleModerationDecision(req: Request, args: { proposalId: string; moderatorPubkey: string; toStatus: ProposalStatus; signature?: string }) {
+export async function handleModerationDecision(
+  req: Request,
+  args: {
+    proposalId: string;
+    moderatorPubkey: string;
+    toStatus: ProposalStatus;
+    signature?: string;
+    /** Stage 13 — произвольный комментарий модератора, сохраняется в `ModerationDecision.comment`. */
+    comment?: string | null;
+    /** Stage 13 — причина отказа, сохраняется в `Proposal.rejectionReason` при REJECTED. */
+    rejectionReason?: string | null;
+    /** Stage 13 — если true, пропускаем проверку ed25519-подписи (источник — staff-сессия). */
+    trustedFromStaff?: boolean;
+    /** Stage 13 — если true, пропускаем проверку env/ModeratorGrant (проверено guard-ом). */
+    skipModeratorAllowlistCheck?: boolean;
+  },
+) {
   const started = Date.now();
 
   const tooBig = assertBodySizeWithin(req, 50_000);
@@ -64,12 +89,11 @@ export async function handleModerationDecision(req: Request, args: { proposalId:
     return NextResponse.json({ error: 'rate limit exceeded' }, { status: 429 });
   }
 
-  const moderators = parseModerators();
-  if (moderators.size === 0 || !moderators.has(args.moderatorPubkey)) {
+  if (!args.skipModeratorAllowlistCheck && !(await isModeratorPubkeyAllowed(args.moderatorPubkey))) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
-  if (args.signature) {
+  if (args.signature && !args.trustedFromStaff) {
     const v = verifyModeratorSignature({
       proposalId: args.proposalId,
       toStatus: args.toStatus,
@@ -80,6 +104,8 @@ export async function handleModerationDecision(req: Request, args: { proposalId:
       return NextResponse.json({ error: v.error }, { status: 400 });
     }
   }
+
+  const commentTrimmed = typeof args.comment === 'string' && args.comment.trim() ? args.comment.trim().slice(0, 1000) : null;
 
   try {
     const proposal = await prisma.proposal.findUnique({
@@ -116,6 +142,7 @@ export async function handleModerationDecision(req: Request, args: { proposalId:
           fromStatus: proposal.status,
           toStatus: args.toStatus,
           decisionSignature: args.signature ?? null,
+          comment: commentTrimmed,
         },
       });
 
@@ -139,7 +166,13 @@ export async function handleModerationDecision(req: Request, args: { proposalId:
     const now = new Date();
     const updatedCount = await prisma.proposal.updateMany({
       where: { id: proposal.id, status: 'SUBMITTED' },
-      data: { status: args.toStatus, decidedAt: now },
+      data: {
+        status: args.toStatus,
+        decidedAt: now,
+        ...(args.toStatus === 'REJECTED' && args.rejectionReason
+          ? { rejectionReason: args.rejectionReason.slice(0, 500) }
+          : {}),
+      },
     });
 
     if (updatedCount.count !== 1) {
@@ -160,6 +193,7 @@ export async function handleModerationDecision(req: Request, args: { proposalId:
         moderatorPubkey: args.moderatorPubkey,
         toStatus: args.toStatus,
         decisionSignature: args.signature ?? null,
+        comment: commentTrimmed,
       },
       create: {
         proposalId: proposal.id,
@@ -167,6 +201,7 @@ export async function handleModerationDecision(req: Request, args: { proposalId:
         fromStatus: 'SUBMITTED',
         toStatus: args.toStatus,
         decisionSignature: args.signature ?? null,
+        comment: commentTrimmed,
       },
     });
 

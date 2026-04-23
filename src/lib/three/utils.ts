@@ -12,7 +12,11 @@ export function latLngToVec3(lat: number, lng: number, radius: number): THREE.Ve
 }
 
 export function computeGlobeCenterLatLng(globeGroup: THREE.Group): LatLng | null {
-  const front = new THREE.Vector3(0, 0, -1);
+  // Камера сцены стоит на +Z (см. EarthScene/sandbox/networks[id]: camera.position.set(0,0,+z)),
+  // поэтому видимая ближняя точка единичной сферы — (0,0,+1). Раньше здесь стояло (0,0,-1) —
+  // обратная (невидимая) сторона глобуса, из-за чего при переходе 3D→2D Leaflet центрировался
+  // на антиподе видимой точки.
+  const front = new THREE.Vector3(0, 0, 1);
   const local = front.applyQuaternion(globeGroup.quaternion.clone().invert());
 
   const y = Math.max(-1, Math.min(1, local.y));
@@ -47,7 +51,8 @@ export function orientGlobeGroupCenterFromLatLng(globeGroup: THREE.Group, lat: n
   const localCenterRay = new THREE.Vector3(x, y, z);
   if (localCenterRay.lengthSq() < 1e-12) return;
 
-  const front = new THREE.Vector3(0, 0, -1);
+  // Должно быть согласовано с computeGlobeCenterLatLng: «front» = видимый центр (0,0,+1).
+  const front = new THREE.Vector3(0, 0, 1);
   const q = new THREE.Quaternion().setFromUnitVectors(localCenterRay.normalize(), front);
   globeGroup.quaternion.copy(q);
 }

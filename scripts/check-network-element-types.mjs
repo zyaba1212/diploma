@@ -1,3 +1,5 @@
+// check-network-element-types — CLI-скрипт (данные, синхронизация или проверка).
+
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();

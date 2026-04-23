@@ -1,3 +1,5 @@
+// HTTP API /api/proposals/[id]/rollback — Next.js Route Handler.
+
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { deleteHistoryEntry, ensureHistoryEntryTable, getLatestHistoryEntry } from '@/lib/stage7/historyStore';
@@ -9,6 +11,7 @@ import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 import { logApiMetric } from '@/lib/apiOps';
 import { internalApiError } from '@/lib/apiError';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type Params = {
   params: Promise<{ id: string }>;
@@ -84,6 +87,10 @@ export async function POST(req: Request, { params }: Params) {
   const ok = nacl.sign.detached.verify(msgBytes, sigBytes, pkBytes);
   if (!ok) {
     return NextResponse.json({ error: 'signature invalid' }, { status: 401 });
+  }
+
+  if (await isUserBanned(proposal.authorPubkey)) {
+    return userBannedResponsePlain();
   }
 
   const diff = latest.diff;

@@ -6,15 +6,19 @@ export const dynamic = 'force-dynamic';
 
 /* eslint-disable react/jsx-no-bind */
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
-
+import { LocalScopeNetworkReferencePanel } from '@/components/proposals/LocalScopeNetworkReferencePanel';
+import Link from 'next/link';
+import { contentHashStableJson, type ActionForContentHash } from '@/lib/stage7/proposalContentHashCore';
 type Scope = 'GLOBAL' | 'LOCAL';
 
 type ProposalDTO = {
@@ -25,6 +29,7 @@ type ProposalDTO = {
   title: string | null;
   description?: string | null;
   createdAt: string;
+  pinned?: boolean;
 };
 
 type ProposalDetails = ProposalDTO & {
@@ -121,16 +126,19 @@ async function fetchJsonWithTimeoutAndRetry<T>(
   throw lastErr instanceof Error ? lastErr : new Error('Network request failed');
 }
 
-export default function ProposePage() {
+function ProposePageContent() {
   const wallet = useWallet();
   const authorPubkey = useAuthorPubkey();
-
+  const sessionVerified = useSessionVerified();
+  const searchParams = useSearchParams();
   const [proposalsState, setProposalsState] = useState<FetchState>({ status: 'idle' });
   const [scope, setScope] = useState<Scope>('GLOBAL');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  /** После успешного POST — ссылка в редактор `/propose/edit/…`. */
+  const [newlyCreatedProposalId, setNewlyCreatedProposalId] = useState<string | null>(null);
   const [chainSubmitState, setChainSubmitState] = useState<Record<string, ChainSubmitState>>({});
 
   // Stage 7: minimal UI to add actions, apply/rollback and show history.
@@ -170,17 +178,27 @@ export default function ProposePage() {
 
   const sortedProposals = useMemo(() => {
     if (proposalsState.status !== 'success') return [];
-    return [...proposalsState.data].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+    const mine = [...proposalsState.data];
+    const pin = (p: ProposalDTO) => (p.pinned ? 1 : 0);
+    return mine.sort((a, b) => {
+      const dPin = pin(b) - pin(a);
+      if (dPin !== 0) return dPin;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
   }, [proposalsState]);
 
-  // Default selection: pick the latest proposal from the list.
+  // Выбор из ?open=… или последнее предложение из списка.
   useEffect(() => {
-    if (selectedProposalId) return;
-    if (sortedProposals.length === 0) return;
-    setSelectedProposalId(sortedProposals[0].id);
-  }, [selectedProposalId, sortedProposals]);
+    const open = searchParams.get('open');
+    if (open) {
+      setSelectedProposalId(open);
+      return;
+    }
+    setSelectedProposalId((prev) => {
+      if (prev) return prev;
+      return sortedProposals[0]?.id ?? null;
+    });
+  }, [searchParams, sortedProposals]);
 
   // Load proposal details (needed for contentHash/status) and history.
   useEffect(() => {
@@ -275,6 +293,10 @@ export default function ProposePage() {
       setFormError('Для создания предложения подключите Phantom-кошелёк.');
       return;
     }
+    if (!sessionVerified) {
+      setFormError('Сначала нажмите «Авторизоваться» в шапке сайта.');
+      return;
+    }
     if (!title.trim()) {
       setFormError('Укажите заголовок предложения.');
       return;
@@ -299,6 +321,9 @@ export default function ProposePage() {
 
       if (!res.ok) throw new Error(await readErrorMessage(res));
 
+      const created = (await res.json()) as ProposalDTO;
+      if (created?.id) setNewlyCreatedProposalId(created.id);
+
       setTitle('');
       setDescription('');
 
@@ -311,37 +336,6 @@ export default function ProposePage() {
     }
   };
 
-  function stableStringify(value: unknown): string {
-    // Stable stringify (matches backend submit route):
-    // - lexicographic key order for objects
-    // - array order preserved
-    // - skips `undefined` keys (like JSON.stringify for objects)
-    if (value === null) return 'null';
-
-    const t = typeof value;
-    if (t === 'number' || t === 'boolean') return JSON.stringify(value);
-    if (t === 'string') return JSON.stringify(value);
-
-    if (Array.isArray(value)) {
-      return `[${value.map((v) => stableStringify(v)).join(',')}]`;
-    }
-
-    if (t === 'object') {
-      const obj = value as Record<string, unknown>;
-      const keys = Object.keys(obj).sort();
-      const parts: string[] = [];
-      for (const key of keys) {
-        const v = obj[key];
-        if (typeof v === 'undefined') continue;
-        parts.push(`${JSON.stringify(key)}:${stableStringify(v)}`);
-      }
-      return `{${parts.join(',')}}`;
-    }
-
-    const res = JSON.stringify(value);
-    return typeof res === 'string' ? res : 'null';
-  }
-
   async function sha256Hex(input: string): Promise<string> {
     const data = new TextEncoder().encode(input);
     const digest = await crypto.subtle.digest('SHA-256', data.buffer as ArrayBuffer);
@@ -352,25 +346,16 @@ export default function ProposePage() {
   }
 
   async function computeProposalContentHash(details: ProposalDetails): Promise<string> {
-    const proposalFields: {
-      scope: string;
-      title?: string;
-      description?: string;
-    } = { scope: details.scope };
-
-    // In backend content hash:
-    // - title/description are included only when not null (Prisma semantics)
-    if (details.title != null) proposalFields.title = details.title;
-    if (details.description != null) proposalFields.description = details.description;
-
-    const actions = (details.actions ?? []).map((a) => ({
-      actionType: a.actionType,
+    const actions: ActionForContentHash[] = (details.actions ?? []).map((a) => ({
+      actionType: a.actionType as ActionForContentHash['actionType'],
       ...(a.targetElementId != null ? { targetElementId: a.targetElementId } : {}),
       elementPayload: a.elementPayload,
     }));
 
-    const stableJson = stableStringify({
-      proposalFields,
+    const stableJson = contentHashStableJson({
+      scope: details.scope,
+      title: details.title ?? null,
+      description: details.description ?? null,
       actions,
     });
 
@@ -407,6 +392,13 @@ export default function ProposePage() {
       setChainSubmitState((prev) => ({
         ...prev,
         [p.id]: { submitting: false, error: 'signMessage not supported by wallet' },
+      }));
+      return;
+    }
+    if (!sessionVerified) {
+      setChainSubmitState((prev) => ({
+        ...prev,
+        [p.id]: { submitting: false, error: 'Нажмите «Авторизоваться» в шапке сайта.' },
       }));
       return;
     }
@@ -464,6 +456,7 @@ export default function ProposePage() {
   async function signBase58AndSubmit(message: string, endpoint: string, body: Record<string, unknown>) {
     if (!wallet.connected) throw new Error('Wallet not connected');
     if (!wallet.signMessage) throw new Error('signMessage not supported by wallet');
+    if (!sessionVerified) throw new Error('Нажмите «Авторизоваться» в шапке сайта.');
 
     const encoded = encodeMessage(message);
     const sigBytes = await wallet.signMessage(encoded);
@@ -651,8 +644,15 @@ export default function ProposePage() {
     >
       <h1 style={{ fontSize: 22, marginBottom: 4 }}>Propose / Предложения</h1>
       <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-        Режим создания/отслеживания предложений (Stage 5) и on-chain фиксации (Stage 6).
+        Режим создания/отслеживания предложений (Stage 5) и on-chain фиксации (Stage 6). Ниже —{' '}
+        <a href="#belarus-network-model" style={{ color: 'var(--accent, #8ab4f8)' }}>
+          эталонная логика сети для LOCAL (РБ)
+        </a>
+        .
       </p>
+
+      <LocalScopeNetworkReferencePanel />
+
       {!wallet.connected ? (
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
           Wallet disconnected: операции подписи недоступны. Если подпись/запросы блокируются в production, проверьте CSP
@@ -673,17 +673,7 @@ export default function ProposePage() {
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>
               Подключите Phantom-кошелёк на главной странице, чтобы увидеть свои предложения.
             </div>
-          ) : proposalsState.status === 'loading' ? (
-            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Загрузка предложений…</div>
-          ) : proposalsState.status === 'error' ? (
-            <div style={{ fontSize: 13, color: 'var(--danger)' }}>
-              Не удалось загрузить предложения: {proposalsState.error}
-            </div>
-          ) : proposalsState.status === 'success' && sortedProposals.length === 0 ? (
-            <div style={{ fontSize: 13, color: 'var(--muted)' }}>
-              У вас пока нет предложений. Создайте первое ниже.
-            </div>
-          ) : (
+          ) : sortedProposals.length > 0 ? (
             <div style={{ overflowX: 'auto' }}>
               <table
                 style={{
@@ -698,6 +688,7 @@ export default function ProposePage() {
                     <th style={{ padding: '4px 6px' }}>Status</th>
                     <th style={{ padding: '4px 6px' }}>Scope</th>
                     <th style={{ padding: '4px 6px' }}>Created</th>
+                    <th style={{ padding: '4px 6px' }}>Редактирование</th>
                     <th style={{ padding: '4px 6px' }}>Chain</th>
                   </tr>
                 </thead>
@@ -733,6 +724,16 @@ export default function ProposePage() {
                       >
                         {new Date(p.createdAt).toLocaleString()}
                       </td>
+                      <td style={{ padding: '6px 6px', borderTop: '1px solid var(--border)', fontSize: 12 }}>
+                        <Link
+                          href={`/propose/edit/${encodeURIComponent(p.id)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: 'var(--accent, #8ab4f8)' }}
+                        >
+                          Редактировать
+                        </Link>
+                      </td>
                       <td style={{ padding: '6px 6px', borderTop: '1px solid var(--border)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 240 }}>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -741,6 +742,7 @@ export default function ProposePage() {
                               disabled={
                                 chainSubmitState[p.id]?.submitting === true ||
                                 !wallet.connected ||
+                                !sessionVerified ||
                                 p.status !== 'SUBMITTED'
                               }
                               onClick={() => submitProposalToChain(p)}
@@ -763,11 +765,11 @@ export default function ProposePage() {
                             <div style={{ fontSize: 12 }}>
                               tx:{" "}
                               <span title={chainSubmitState[p.id]?.txSignature}>
-                                {chainSubmitState[p.id]?.txSignature!.slice(0, 6)}…
-                                {chainSubmitState[p.id]?.txSignature!.slice(-6)}
-                              </span>
-                            </div>
-                          ) : null}
+                                  {chainSubmitState[p.id]?.txSignature!.slice(0, 6)}…
+                                  {chainSubmitState[p.id]?.txSignature!.slice(-6)}
+                                </span>
+                              </div>
+                            ) : null}
                         </div>
                       </td>
                     </tr>
@@ -775,10 +777,48 @@ export default function ProposePage() {
                 </tbody>
               </table>
             </div>
+          ) : proposalsState.status === 'loading' ? (
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Загрузка предложений…</div>
+          ) : proposalsState.status === 'error' ? (
+            <div style={{ fontSize: 13, color: 'var(--danger)' }}>
+              Не удалось загрузить предложения: {proposalsState.error}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+              У вас пока нет предложений. Создайте первое ниже.
+            </div>
           )}
         </Panel>
 
         <Panel title="Создать предложение">
+          {newlyCreatedProposalId ? (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid rgba(120,160,255,0.35)',
+                background: 'rgba(120,160,255,0.08)',
+                fontSize: 13,
+                color: 'var(--text)',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <span>Черновик создан.</span>
+              <Link
+                href={`/propose/edit/${encodeURIComponent(newlyCreatedProposalId)}`}
+                style={{ color: 'var(--accent, #8ab4f8)', fontWeight: 600 }}
+              >
+                Открыть редактор сети
+              </Link>
+              <Button type="button" onClick={() => setNewlyCreatedProposalId(null)}>
+                Скрыть
+              </Button>
+            </div>
+          ) : null}
           <form
             onSubmit={handleSubmit}
             style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640 }}
@@ -839,7 +879,7 @@ export default function ProposePage() {
             ) : null}
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button type="submit" disabled={submitting || !authorPubkey}>
+              <Button type="submit" disabled={submitting || !authorPubkey || !sessionVerified}>
                 {submitting ? 'Создание…' : 'Создать предложение'}
               </Button>
             </div>
@@ -955,6 +995,7 @@ export default function ProposePage() {
                   disabled={
                     actionSubmitState.submitting ||
                     !wallet.connected ||
+                    !sessionVerified ||
                     proposalDetailsState.status !== 'success' ||
                     proposalDetailsState.details.status !== 'DRAFT'
                   }
@@ -974,6 +1015,7 @@ export default function ProposePage() {
                   disabled={
                     applyState.submitting ||
                     !wallet.connected ||
+                    !sessionVerified ||
                     proposalDetailsState.status !== 'success' ||
                     proposalDetailsState.details.status !== 'ACCEPTED' ||
                     !proposalDetailsState.details.contentHash
@@ -988,6 +1030,7 @@ export default function ProposePage() {
                   disabled={
                     rollbackState.submitting ||
                     !wallet.connected ||
+                    !sessionVerified ||
                     proposalDetailsState.status !== 'success' ||
                     proposalDetailsState.details.status !== 'APPLIED' ||
                     historyState.status !== 'success' ||
@@ -1050,5 +1093,13 @@ export default function ProposePage() {
         </Panel>
       </div>
     </main>
+  );
+}
+
+export default function ProposePage() {
+  return (
+    <Suspense fallback={<main style={{ padding: 24, minHeight: '40vh', color: 'var(--muted)' }}>Загрузка…</main>}>
+      <ProposePageContent />
+    </Suspense>
   );
 }

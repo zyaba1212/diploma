@@ -1,3 +1,5 @@
+// stage7/networkElementOps.ts — прикладная библиотека/утилиты.
+
 import type { Scope, NetworkElementType } from '@prisma/client';
 
 export type NetworkElementSnapshot = {
@@ -27,6 +29,7 @@ const NETWORK_ELEMENT_TYPES: string[] = [
   'MULTIPLEXER',
   'DEMULTIPLEXER',
   'REGENERATOR',
+  'REGENERATION_POINT',
   'MODEM',
 
   // Underground / terrestrial cables
@@ -35,7 +38,12 @@ const NETWORK_ELEMENT_TYPES: string[] = [
 
   'BASE_STATION',
   'SATELLITE',
+  'SATELLITE_RASSVET',
   'EQUIPMENT',
+  'MESH_RELAY',
+  'SMS_GATEWAY',
+  'VSAT_TERMINAL',
+  'OFFLINE_QUEUE',
 ];
 
 export function isNetworkElementType(value: unknown): value is NetworkElementType {

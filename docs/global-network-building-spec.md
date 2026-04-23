@@ -159,6 +159,22 @@ Enum:
 - `color: feature.properties.color | null`
 - `importedAt: <ISO>`
 
+Дополнительно (если не указан флаг **`--no-details`** в скрипте): для каждого уникального `feature.properties.id` выполняется HTTP-загрузка файла `cable/<id>.json` из того же репозитория (база URL по умолчанию совпадает с каталогом `cable/` на `raw.githubusercontent.com`; переопределение — **`SUBMARINE_CABLE_DETAIL_BASE_URL`**, строка с завершающим `/`). Из ответа в `metadata` попадают:
+
+- `year: number | отсутствует` — из `rfs_year`, иначе из префикса строки `rfs` (первые четыре цифры, если есть)
+- `countries: string[] | отсутствует` — уникальные значения `landing_points[].country`, отсортированные лексикографически
+- `rfs: string | отсутствует` — сырая строка `rfs` (например «2020 Q2»), если задана
+- `officialUrl: string | отсутствует` — из поля `url` в `cable/<id>.json`, только если после обрезки пробелов строка начинается с `http://` или `https://` и парсится как URL с тем же протоколом (иначе не сохраняется)
+
+При ошибке загрузки или отсутствии файла для конкретного `id` сегмент всё равно импортируется с базовыми полями выше; год и страны для него могут отсутствовать.
+
+**Отображение в UI (`global-network`):** блок «Источники» строится единым helper для всех типов объектов (кабели и узлы), если доступны валидные URL из `metadata`/`provider`:
+
+- «Сайт проекта / оператора» — при наличии `metadata.officialUrl` (или совместимого URL-поля в metadata),
+- «Источник провайдера» — из `NetworkProvider.sourceUrl`,
+- «Ссылка на датасет/запись» — по типу и метаданным объекта (например, `cable/<id>.json` для OUCM, OSM permalink, data.gov.au, Celestrak),
+- «Поиск в Wikipedia (EN)» — для подводных кабелей; это URL **поиска**, не гарантированная статья и не подтверждение трассы.
+
 #### 3.3.3. `CABLE_UNDERGROUND_FIBER/CABLE_UNDERGROUND_COPPER` (underground)
 
 Текущий underground импорт задаёт (через `scripts/sync-underground-cables.mjs`):
@@ -221,7 +237,9 @@ Enum:
 - URL по умолчанию: `.../cable/cable-geo.json`
 - Env/per-file:
   - `SUBMARINE_CABLE_GEO_URL` (подмена URL)
+  - `SUBMARINE_CABLE_DETAIL_BASE_URL` (база для `cable/<id>.json`, по умолчанию каталог `cable/` того же репозитория)
   - `--file path/to/cable-geo.json`
+  - `--no-details` — не запрашивать `cable/<id>.json` (без `year` / `countries` в metadata)
 
 Идемпотентность:
 

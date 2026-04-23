@@ -2,10 +2,134 @@
 
 Короткие заметки по решениям и граблям, чтобы агенты не повторяли ошибки.
 
+## Stage 13: полноценная админ-панель (2026-04-22)
+
+- **Парольный вход в `/admin` удалён** (маршрут `POST /api/admin/login/password`, `src/lib/admin-password.ts`, переменные `ADMIN_USERNAME` / `ADMIN_PASSWORD_SCRYPT` / `ADMIN_SMOKE_PASSWORD`). Админ — только Phantom + `ADMIN_WALLET_PUBKEY`; smoke использует `ADMIN_SMOKE_WALLET_SECRET` (base58 seed/secret, pubkey = `ADMIN_WALLET_PUBKEY`).
+- **Миграция** `20260425120000_stage13_admin_panel_baseline`: `StaffRole.MODERATOR`, `User.bannedAt/bannedReason`, поля отмены/отказа у `Proposal`, `ModerationDecision.comment`, модели `AuditLog`, `ProposalFeedback`, `StaffSession.pubkey` + связи.
+- **Auth:** `src/lib/admin-guard.ts`, `src/lib/audit.ts`; вход по кошельку различает `ADMIN_WALLET_PUBKEY` vs `ModeratorGrant`/`MODERATOR_PUBKEYS`; `GET /api/admin/auth/nonce` с rate-limit.
+- **API/UI:** вкладки под `src/app/admin/(dashboard)/`, редирект `/moderate` → `/admin/moderation`, пункт «Админка» в `SiteHeader` при валидной staff-сессии. RSS-логика вынесена в `src/lib/news.ts`.
+- **Грабли Windows:** `npx prisma generate` может дать `EPERM` на `query_engine-windows.dll.node`, если запущен `next dev` — остановить процессы node для проекта, повторить generate.
+
+## Stage 7: восстановлены `proposalActionFold` + `LocalScopeNetworkReferencePanel` (2026-04-22)
+
+- Отсутствовали [`proposalActionFold.ts`](src/lib/stage7/proposalActionFold.ts) и [`LocalScopeNetworkReferencePanel.tsx`](src/components/proposals/LocalScopeNetworkReferencePanel.tsx) → `Module not found` в [`/networks/[id]`](src/app/networks/[id]/page.tsx) и [`/propose`](src/app/propose/page.tsx).
+- **`foldProposalActionsForDisplay`:** по порядку действий накапливает элементы для карты/глобуса (`CREATE` по ключу `elementPayload.id` / `tempId` / `ChangeAction.id`; `UPDATE` через `buildNetworkElementUpdateData`; `DELETE` по `targetElementId`).
+- **Панель LOCAL:** якорь `#belarus-network-model`, ссылки на `/global-network`, `/networks`, `/sandbox`, главная; краткий текст эталонной цепочки.
+
+## Stage 7: восстановлены `proposalMutationPolicy` + contentHash libs (2026-04-22)
+
+- На диске отсутствовали [`proposalMutationPolicy.ts`](src/lib/stage7/proposalMutationPolicy.ts), [`proposalContentHashCore.ts`](src/lib/stage7/proposalContentHashCore.ts), [`proposalContentHashServer.ts`](src/lib/stage7/proposalContentHashServer.ts) → `Module not found` в API предложений и в [`/propose`](src/app/propose/page.tsx) (импорт `contentHashStableJson`).
+- **Политика:** `canAppendSingleChangeAction` только `DRAFT`; `canReplaceActionsViaSandboxSync` / `canPatchProposalMetadata` — `DRAFT` или `SUBMITTED` при `votes === 0` и без непустого `onChainTxSignature` (как в записи 2026-04-02).
+- **Хэш:** `stableStringify` / канонический объект согласованы с [`submit/route.ts`](src/app/api/proposals/[id]/submit/route.ts) (Stage 5+).
+
+## Восстановлены `globeAppearance.ts` + `globeMapSync.ts` (2026-04-02)
+
+- Файлы отсутствовали на диске → `Module not found` в `EarthScene` / `/networks/[id]`. Воссозданы под текущие импорты: фон сцены, `GLOBE_DEFAULT_CENTER`, `applyLoadedEarthTextures`, `updateGlobeFrontLabelsVisibility`, `GlobeLabelCandidate`; синхрон глобус ↔ Leaflet в `globeMapSync`.
+
+## Откат CRISIS-слоя (2026-04-02)
+
+- Убраны `networkType` в запросе сети, `NetworkTypeContext`, визуалы CRISIS в [`EarthScene.tsx`](src/components/EarthScene.tsx) / [`MapView.tsx`](src/components/MapView.tsx), отдельные ветки на [`/networks`](src/app/networks/page.tsx), [`/propose`](src/app/propose/page.tsx), [`/networks/[id]`](src/app/networks/[id]/page.tsx).
+- Удалены зависимости от несуществующего [`proposalImmutability`](src/lib/proposalImmutability.ts) в API предложений; восстановлена реализация [`sync-actions`](src/app/api/proposals/[id]/sync-actions/route.ts) (пустой файл ломал сборку).
+- **БД:** если миграция/сид CRISIS уже применялись локально, enum и строки в PostgreSQL нужно чистить вручную — код рассчитан на прежний набор `NetworkElementType`.
+
+## Windows dev: `Cannot find module './NNNN.js'` после Fast Refresh (2026-04-02)
+
+- **Симптом:** `MODULE_NOT_FOUND` на `./1331.js`, `./5611.js` и т.д. у `webpack-runtime` / страниц / API после «full reload» в dev.
+- **Причина:** рассинхрон артефактов в `.next` (прерванная сборка, антивирус, инкрементальная пересборка).
+- **Лечение:** остановить `next dev`, `node scripts/clean-next.mjs` или `npm run dev:clean`, снова поднять dev. Профилактика и Watchpack `EINVAL` на `C:\…` — см. [`docs/windows-dev.md`](docs/windows-dev.md); в dev уже `webpack.cache = memory` в [`next.config.mjs`](next.config.mjs).
+
+## /propose: справка LOCAL — редактор предложения vs песочница + баннер после создания (2026-04-02)
+
+- **Справка:** в [`LocalScopeNetworkReferencePanel`](src/components/proposals/LocalScopeNetworkReferencePanel.tsx) разведены маршрут `/propose/edit/[id]` (колонка «Редактировать») и свободная [`/sandbox`](src/app/sandbox/page.tsx); в футере блока добавлена ссылка «Песочница».
+- **UX:** после успешного `POST /api/proposals` на [`src/app/propose/page.tsx`](src/app/propose/page.tsx) показывается баннер «Открыть редактор сети» и кнопка «Скрыть».
+
+## Песочница: одна кнопка «Сохранить предложение» (2026-04-02)
+
+- **UX:** убраны «Сохранить черновик» и отдельная «Отправить на голосование»; в сайдбаре и в модалке одна подпись «Сохранить предложение».
+- **Логика:** после PATCH + `sync-actions` для статуса не `SUBMITTED` при **есть элементы** вызывается `submit-draft`; при нуле элементов — только сохранение метаданных/sync, подсказка сохранить снова после добавления узлов.
+- **Тексты:** «Очистить черновик» → «Очистить сцену»; в подсказке редактора предложения — «сцена» вместо «черновик».
+- **Файл:** [`src/components/sandbox/SandboxPageContent.tsx`](src/components/sandbox/SandboxPageContent.tsx).
+
+## Главная сцена: спутники только при зуме ≥ 2 (2026-04-02)
+
+- **Порог:** `SATELLITE_MIN_VISIBLE_ZOOM = 2` в [`src/lib/geo/viewportBbox.ts`](src/lib/geo/viewportBbox.ts) — для 3D это `zoom` камеры глобуса (`EarthScene`), для 2D — `mapZoom` Leaflet.
+- **3D:** в цикле `animate` для корней с `userData.elType === 'SATELLITE'` вызывается `traverse` и выставляется `visible` **всему поддереву** ([`EarthScene.tsx`](src/components/EarthScene.tsx)): иначе у `Group` с `visible=false` дочерние `Mesh` всё ещё участвуют в `Raycaster.intersectObjects`, и тултип мог показывать спутник (ближе к камере) при наведении на сервер.
+- **Hover:** в `flushHoverRaycast` попадания с `elType === 'SATELLITE'` при `zoom < 2` пропускаются (страховка).
+- **2D:** в [`MapView.tsx`](src/components/MapView.tsx) маркеры `SATELLITE` не добавляются при `mapZoom < 2`; в `EarthScene` передаётся `mapZoom={mapZoom}`.
+
 ## Процесс: журнал обязателен для агента (инвариант)
 
 - **Правило:** агент/ассистент при **существенных** правках кода или конфигов **обязан** в той же сессии дополнять этот файл: что сделано, грабли, решения (см. `AGENTS.md`). Не опускать под предлогом «пользователь не просил md» — для проекта это часть процесса.
 - **Закрепление:** `.cursor/rules/development-journal.mdc` (`alwaysApply: true`), 2026-03-22.
+
+## Редактор предложения: `/propose/edit/[id]` вместо `?proposal=` на песочнице (2026-04-02)
+
+- **Цель:** не затирать черновик свободной песочницы (`localStorage sandbox:draft:v1:…`) при открытии чужого/своего предложения; редактор — отдельный маршрут и вкладка (`target="_blank"` со страницы `/propose`).
+- **Код:** [`SandboxPageContent`](src/components/sandbox/SandboxPageContent.tsx) (`linkedProposalId` + `uiMode`); тонкая обёртка [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx); [`src/app/propose/edit/[proposalId]/page.tsx`](src/app/propose/edit/[proposalId]/page.tsx); `/sandbox?proposal=` → `router.replace` на `/propose/edit/…` (именованные экспорты из `page.tsx` запрещены Next — вынесено в `components/`).
+- **Исправление:** `removeItem(draftStorageKey)` после сохранения и при «Очистить» — только если `!linkedProposalId` (раньше сохранение из режима предложения стирало черновик песочницы).
+- **Док:** [`docs/agents/proposal-sandbox-editor-prompt.md`](docs/agents/proposal-sandbox-editor-prompt.md) обновлён под новый URL.
+
+## Страница `/propose`: эталонная логика сети РБ для LOCAL (2026-04-02)
+
+- **Цель:** закрепить на странице создания предложений схематичную, но логически полную цепочку «Интернет в масштабе страны» (граница/BGP → магистраль → IXP → POP → доступ → DNS/CDN), чтобы авторы предложений с **LOCAL** ориентировались на единый ориентир.
+- **UI:** компонент [`src/components/proposals/LocalScopeNetworkReferencePanel.tsx`](src/components/proposals/LocalScopeNetworkReferencePanel.tsx), вставка в [`src/app/propose/page.tsx`](src/app/propose/page.tsx) под вводным текстом; якорь `#belarus-network-model`, ссылки на `/global-network`, `/networks`, `/`, `/sandbox` (см. также запись выше про редактор vs песочница).
+- **Примечание:** расширение `NetworkElementType` / ASN в Prisma не делалось — только справочный блок; типы узлов по-прежнему согласуются со схемой БД отдельной задачей.
+
+## Песочница ↔ предложения: sync-actions, PATCH (исторически `?proposal=` → теперь `/propose/edit/`) (2026-04-02)
+
+- **Цель:** редактировать набор элементов предложения с тем же UI, что песочница; не плодить рассинхрон `contentHash` после `submit-draft`. **UI редактора:** см. запись выше «Редактор предложения».
+- **API:** `POST /api/proposals/[id]/sync-actions` (подпись `diploma-z96a propose:sync-actions:<id>`), `PATCH /api/proposals/[id]` для title/description (`diploma-z96a propose:patch-metadata:<id>`). `POST .../actions` — **только `DRAFT`**.
+- **Политика:** `sync-actions` и PATCH для `SUBMITTED` только при `votes === 0` и без `onChainTxSignature`; тогда `contentHash` пересчитывается на сервере (`proposalContentHashServer` + `proposalContentHashCore`).
+- **Либы:** `src/lib/stage7/proposalMutationPolicy.ts`, `proposalContentHashCore.ts`, `proposalContentHashServer.ts`, `sandboxFromProposalActions.ts`. `GET /api/proposals/:id` включает `_count.votes`.
+- **UI:** [`src/components/sandbox/SandboxPageContent.tsx`](src/components/sandbox/SandboxPageContent.tsx) + [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx); редактор — `src/app/propose/edit/[proposalId]/page.tsx`; [`src/app/propose/page.tsx`](src/app/propose/page.tsx) — «Редактировать». Промпт: [`docs/agents/proposal-sandbox-editor-prompt.md`](docs/agents/proposal-sandbox-editor-prompt.md).
+- **Грабли:** `@types/leaflet` без `default` — в песочнице тип `LeafletNs` + `leafletRoot()` для interop; сборка: [`MapView.tsx`](src/components/MapView.tsx) `attribution: false` не проходит типы тайла — заменено на пустую строку `''`.
+
+## `/networks/[id]`: удаление предложения только после «Авторизовать» (2026-04-02)
+
+- **Проблема:** UX расходился с песочницей: кнопка «Удалить сеть» была доступна при только подключённом кошельке без прохождения `/api/auth/verify` в шапке.
+- **Сделано:** `useSessionVerified`, кнопка удаления `disabled`, пока нет сессии или `signMessage`; подсказка под блоком автора; те же тексты ошибок, что в песочнице при сохранении.
+- **Файл:** [`src/app/networks/[id]/page.tsx`](src/app/networks/[id]/page.tsx). Серверный `DELETE` по-прежнему только по подписи `diploma-z96a propose:delete:<id>`.
+
+## Песочница: без выбора GLOBAL/LOCAL в UI (2026-04-02)
+
+- **Сделано:** удалён блок «Scope нового» и состояние `draftScope`; новые черновики из песочницы создаются с `scope: 'GLOBAL'`; предложение, открытое по `?proposal=`, по-прежнему синхронизируется со своим `scope` из API.
+- **Файл:** [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx).
+
+## Глобус 3D: trackball вместо мировых осей (2026-04-02)
+
+- **Было:** дельты мыши/тача копились в `pendingDragAccumRef`, в `requestAnimationFrame` — `globeGroup.rotateOnWorldAxis(worldUp, …)` и `rotateOnWorldAxis(camRight, …)` (ощущение «не тот» глобус).
+- **Стало:** инкрементальный trackball — луч в NDC → пересечение с мешем земли или аналитически со сферой (world radius из `getWorldScale`); ось `lastGlobeDir × currGlobeDir`, угол с clamp `TRACKBALL_MAX_RAD_PER_EVENT`; тач 1 палец — тот же путь; `pendingDragAccumRef` удалён.
+- **Файл:** [`src/components/EarthScene.tsx`](src/components/EarthScene.tsx).
+
+## 2D-карта: скрыта строка «Leaflet | © OSM» (2026-04-02)
+
+- **Сделано:** в [`src/components/MapView.tsx`](src/components/MapView.tsx) у `L.map` включено `attributionControl: false`, у тайлового слоя `attribution: false` — угол карты без префикса Leaflet и без текста OSM.
+
+## 2D-карта: D-pad внизу справа (2026-04-02)
+
+- **Сделано:** в [`src/components/EarthScene.tsx`](src/components/EarthScene.tsx) у 8-направленной навигации `bottom: 80` → `bottom: 12`, `right: 16` → `right: 12` — вровень с блоком «Режим / Данные» слева (раньше отступ был под строку атрибуции Leaflet).
+
+## Однострочные заголовки в начале файлов `src/` и `scripts/` (2026-04-02)
+
+- **Запрос:** краткие комментарии к коду; **не** дублировать комментарием каждую функцию/блок по всему репозиторию (шум, противоречит нормальной поддержке).
+- **Сделано:** в начало большинства `.ts`/`.tsx` в `src/` и `.mjs`/`.js` в `scripts/` добавлена одна строка `// …` (маршрут API, страница, библиотека, компонент и т.д.). Файлы, уже начинающиеся с `//` или `/*`, не трогались (многие `scripts/*.mjs` с блоком `/**`).
+- **Утилита:** [`scripts/add-file-header-comments.mjs`](scripts/add-file-header-comments.mjs) — при `'use client'` комментарий сразу под директивой; повторный запуск пропускает файлы с уже вставленным комментарием.
+- **Грабли:** в шаблоне пути заданы как `src/components/…`, не `/src/components/…` (иначе компоненты падали в общий fallback «модуль приложения») — исправлено и поправлены уже вставленные строки в `src/components`, `src/hooks`.
+
+## Webpack dev: `watchOptions.ignored` — не смешивать строки и RegExp (2026-04-02)
+
+- **Симптом:** `npm run dev` падает с `ValidationError`: элементы `configuration[N].watchOptions.ignored[5|6] should be a non-empty string`.
+- **Причина:** в массиве `ignored` были glob-строки + два `RegExp` (корень диска Windows). Схема Webpack 5 для **массива** требует только строки.
+- **Исправление:** [`next.config.mjs`](next.config.mjs) — один объединённый `RegExp` вместо массива. Док: [`docs/windows-dev.md`](docs/windows-dev.md).
+
+## Легенда 3D: убрана ремарка про OSM / Gold Coast / подводные кабели (2026-04-02)
+
+- [`src/components/EarthScene.tsx`](src/components/EarthScene.tsx) — из `GlobeLegendBody` удалён абзац про регион Австралии и подводные кабели по всему миру.
+
+## Watchpack EINVAL на `C:\hiberfil.sys` и т.д. при живом `ignored` (2026-04-02)
+
+- **Факт:** в скомпилированном Watchpack при начальном скане каталога для имён из `readdir` вызывается `lstat` **без** предварительной проверки `ignored`, поэтому `watchOptions.ignored` не гарантирует отсутствие `Watchpack Error (initial scan): EINVAL … lstat 'C:\…'`.
+- **Смягчение:** при `WATCHPACK_POLLING=true` в [`next.config.mjs`](next.config.mjs) выставляется `watchOptions.poll` (мс из `WATCHPACK_POLL_MS` или 3000). Подробнее: [`docs/windows-dev.md`](docs/windows-dev.md).
 
 ## ER-диаграмма БД для пояснительной записки (2026-03-23)
 
@@ -60,9 +184,9 @@
 
 ## EarthScene: 2D→3D + направление ЛКМ (2026-03-22)
 
-- **ЛКМ/тач:** в `animate` знаки `rotateOnWorldAxis(worldUp, …)` и `rotateOnWorldAxis(camRight, …)` инвертированы относительно прежних (`-dx/-dy` → `+dx/+dy`). Дельты копятся в `pendingDragAccumRef` (общий ref с циклом `animate`).
-- **2D→3D:** при переходе и в обработчике кнопки «3D» сбрасывается `pendingDragAccumRef`, чтобы первый кадр после `syncGlobeToMapCenter` не вращал глобус из-за накопленного drag.
-- **Где трогается ориентация глобуса:** `syncGlobeToMapCenter` — `useLayoutEffect` при `MAP_2D→GLOBE_3D`, инициализация сцены (~строка 279), клик «3D»; `globeGroup.quaternion.normalize()` — только в `animate` после drag.
+- **Устарело (2026-04-02):** схема `pendingDragAccumRef` + вращение в `animate` заменена на **trackball** (см. секцию «Глобус 3D: trackball» выше).
+- **2D→3D:** раньше сброс `pendingDragAccumRef`; теперь якорь trackball сбрасывается в обработчиках up / lost capture / touch end.
+- **Где трогается ориентация глобуса:** `syncGlobeToMapCenter` — `useLayoutEffect` при `MAP_2D→GLOBE_3D`, инициализация сцены, клик «3D»; `globeGroup.quaternion.normalize()` — после шага trackball.
 
 ### Вопросы для DeepSeek (если центр 2D и лицо глобуса всё ещё расходятся)
 
@@ -1561,3 +1685,167 @@ What changed:
 
 Result:
 - Статус проекта: рабочий в dev и production build режимах после восстановления.
+
+## Импорт сетевых данных: Overpass mirror + повторы Celestrak (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- Выполнен импорт `major datacenters/IX` (`node scripts/sync-major-datacenters.mjs`) — успешно.
+- Для базовых станций применен mirror Overpass: `OVERPASS_URL=https://overpass.kumi.systems/api/interpreter` и запуск с пониженным лимитом (`--limit 100`) — импорт завершен успешно.
+- Спутниковый импорт `sync-satellites-tle-celestrak.mjs` выполнен 2 раза с паузами; оба запуска завершились `Celestrak HTTP 403` (внешний источник блокирует доступ по текущему каналу).
+
+Runtime check:
+- Проверка `/api/network?scope=GLOBAL` после импортов:
+  - `CABLE_FIBER: 1352`
+  - `SATELLITE: 181`
+  - `CABLE_UNDERGROUND_FIBER: 128`
+  - `BASE_STATION: 32`
+  - `SERVER: 20`
+  - `PROVIDER: 14`
+
+Result:
+- Проблема пустого слоя базовых станций закрыта (тип `BASE_STATION` присутствует).
+- Основной блокер для актуализации спутников — внешний `403` от Celestrak; требуется fallback URL/proxy или локальный кэш TLE.
+
+## Восстановление папок из origin/main (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `src/**`
+- `prisma/**`
+- `public/**`
+- `scripts/**`
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- Выполнено восстановление целевых каталогов из удалённой ветки `origin/main` командой выборочного checkout путей.
+- Перезаписаны локальные версии в `src/`, `prisma/`, `public/`, `scripts/` по состоянию `main`, чтобы убрать расхождения после неполного копирования проекта между ПК.
+
+Result:
+- Целевые каталоги синхронизированы с `origin/main`; в индексе отражён набор восстановленных файлов для дальнейшей проверки/коммита по задаче.
+
+## Фикс пакета из 10 багов: sandbox/news/auth/perf (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `src/app/sandbox/page.tsx`
+- `src/lib/stage7/networkElementOps.ts`
+- `src/app/api/proposals/[id]/actions/route.ts`
+- `src/app/api/news/route.ts`
+- `src/app/news/page.tsx`
+- `scripts/README.md`
+- `src/components/SiteHeader.tsx`
+- `src/app/cabinet/page.tsx`
+- `src/components/AuthBlock.tsx`
+- `src/components/WalletIdleAutoconnect.tsx`
+- `src/components/EarthScene.tsx`
+- `src/components/MapView.tsx`
+
+What changed:
+- Sandbox:
+  - Удалён переключатель `Показать глобальную сеть` и связанная подгрузка глобальной сети.
+  - Добавлена реконструкция 2D Leaflet-слоёв из `elements` после реинициализации карты и при изменениях состояния (фикс кейса 2D -> 3D -> 2D).
+  - Переставлены контролы: D-pad справа снизу, zoom-кнопки слева снизу в горизонталь.
+  - Добавлено сохранение черновика песочницы в `localStorage` (восстановление между переходами), плюс кнопка очистки черновика.
+  - Улучшен UX поиска: фокус-стейт с визуальной анимацией (понятно, когда поле готово к вводу).
+  - Усилен flow `Сохранить как предложение`: проверка статуса `SUBMITTED`, понятная ошибка на rate-limit, очистка local draft при успешной отправке.
+- Proposals/API:
+  - В `networkElementOps` добавлены типы `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE` для совместимости payload из песочницы.
+  - В `/api/proposals/[id]/actions` повышен rate limit (20 -> 200/мин), чтобы массовое сохранение схем из песочницы не ломалось на серии action-запросов.
+- News:
+  - В `/api/news` добавлен авто-bootstrap sync: если `NewsCache` пустой, API пытается выполнить RSS sync и перечитывает кэш.
+  - На странице `/news` обновлён текст пустого состояния (теперь явно про автоматическое обновление ленты).
+  - В `scripts/README.md` добавлено пояснение про авто-bootstrap.
+- Auth/Profile:
+  - Разделён признак "есть профиль в БД" и "прошёл текущую авторизацию": введён ephemeral `isVerifiedForConnection` на клиенте.
+  - После disconnect/idle-disconnect шлётся `auth:reset`, статус авторизации сбрасывается.
+  - После изменения username в кабинете шлётся `profile:updated`, шапка сразу обновляет отображаемый username.
+  - Header больше не считает пользователя авторизованным только по `inDatabase`.
+- Global-network perf:
+  - 3D rebuild сети в `EarthScene` выполняется только в режиме `GLOBE_3D` (без лишней heavy-пересборки в 2D).
+  - Polling bbox в 3D ослаблен (интервал 1500ms вместо 800ms).
+  - Убраны повторные O(n) поиски провайдера: добавлен memoized lookup `providerNameById` в `EarthScene` и `MapView`.
+  - Для поиска населённого пункта в `EarthScene` добавлен явный фокус-индикатор (визуальный feedback).
+
+Runtime check:
+- `npm run lint` -> `✔ No ESLint warnings or errors`.
+
+Грабли / решения:
+- Причина "предложение не появляется" оказалась комбинированной: часть типов из песочницы не проходила валидацию `NetworkElementType` + при больших схемах упирались в лимит action-запросов. Закрыто расширением enum whitelist и ослаблением rate-limit.
+- Потеря сети в 2D после 3D была не в данных, а в отсутствии восстановления Leaflet-слоёв после повторного mount карты; исправлено через единый rebuild из state.
+
+## UX follow-up: легенда, 3D→2D zoom 12, auth-gate save, proposals 500, news paging, perf doc (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `src/components/EarthScene.tsx`
+- `src/app/sandbox/page.tsx`
+- `src/app/networks/[id]/page.tsx`
+- `src/hooks/useSessionVerified.ts`
+- `src/app/api/proposals/route.ts`
+- `src/app/news/page.tsx`
+- `docs/architecture.md`
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- Легенда на глобальной сети: убрана строка «Офлайн-очередь» (тип в данных не трогали).
+- Переход **3D → 2D** с **zoom 12**: `EarthScene` (флаг + `onMapReady` + `applyGlobeCenterToLeafletMap`), песочница (`map2DZoom12AfterGlobeRef` + `whenReady`), просмотр предложения `networks/[id]` (`map2DZoom12FromGlobeRef`).
+- Песочница: кнопки режима **3D слева, 2D справа**.
+- Авторизация и сохранение: хук `useSessionVerified` (события `auth:verified` / `auth:reset`); в песочнице сохранение предложения только при `sessionVerified`; `POST /api/proposals` — **403**, если нет строки `User` по `authorPubkey` (нужен `POST /api/auth/verify`).
+- `/networks` HTTP 500: применена миграция `20260322140000_proposal_pinned` (`prisma migrate deploy`); в `GET /api/proposals` добавлен **fallback** без поля `pinned`, если колонка отсутствует (ошибка Prisma/SQL про `pinned`); в dev логируется первичная ошибка.
+- `/news`: порция **20** записей при заходе; кнопка **«Загрузить больше»** (всегда внизу) догружает старые по `offset`; при **>20** загруженных — нумерованная пагинация по 20 на страницу; догрузка **не** сохраняется между уходами со страницы (новый mount = снова только первая порция).
+- `docs/architecture.md`: секция **«Производительность глобальной сети»** и backlog (bbox, LOD, батчинг, без отрисовки «всего мира» в кадре).
+
+Runtime check:
+- `npm run lint` → без предупреждений.
+- `npx prisma migrate deploy` — применена миграция `proposal_pinned` на локальной БД.
+
+## План UX: контролы предложения, автор delete/edit, hover 3D, поиск 3D, RSS для старых новостей (координатор)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `src/app/networks/[id]/page.tsx`
+- `src/app/api/proposals/[id]/route.ts`
+- `src/app/propose/page.tsx`
+- `src/lib/stage7/proposalActionFold.ts`
+- `src/components/EarthScene.tsx`
+- `src/app/sandbox/page.tsx`
+- `src/lib/news/syncFeeds.ts`
+- `src/lib/news/newsSyncThrottle.ts`
+- `src/app/api/news/route.ts`
+- `src/app/news/page.tsx`
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- **Просмотр предложения (`/networks/[id]`)**: зум **слева снизу, горизонтально**; отступ `bottom: calc(52px + safe-area)` под оверлей Next.js (N) в dev; на **2D** D-pad **справа снизу**; мобильные правила `.pv-zoom-block` / `.pv-nav-block` согласованы.
+- **Автор**: кнопки **«Редактировать»** (`/propose?open=<id>`) и **«Удалить сеть»** (подпись `diploma-z96a propose:delete:<id>`); **`DELETE /api/proposals/[id]`** — проверка подписи, запрет для `ACCEPTED`/`APPLIED`, перед удалением proposal — `HistoryEntry` + `ChangeAction` (из-за `ON DELETE RESTRICT` на actions).
+- **Предложение / 3D**: `raycaster.params.Line.threshold`, игнор `__worldLabel`, фильтр hit по линиям (передняя полусфера); список и сцена строятся из **`foldProposalActionsForDisplay`** (CREATE + UPDATE/DELETE по известным ключам).
+- **Глобальная сеть / песочница**: плавающий **поиск поселения** поверх **3D** (как на странице предложения); в `EarthScene` поиск по API при `GLOBE_3D`, выбор результата вызывает **`syncGlobeToMapCenter`**.
+- **Новости**: `ITEMS_PER_SOURCE` **90**; при **`offset > 0`** или **`refresh=1`** — throttled RSS-sync ([`newsSyncThrottle.ts`](src/lib/news/newsSyncThrottle.ts), 5 мин на инстанс) + rate limit по IP; клиент при «Загрузить больше» передаёт **`refresh=1`**.
+
+Runtime check:
+- `npm run lint` → без предупреждений.
+- `npm run build`: при необходимости **`npx prisma generate`** (если типы клиента не содержат `pinned` после миграций); локально возможен EPERM на замену `query_engine` — повторить generate.
+
+## Windows Watchpack: игнор корневых системных путей (Agent)
+
+Date: 2026-04-02
+
+FilesChanged:
+- `next.config.mjs`
+- `docs/windows-dev.md`
+- `DEVELOPMENT_JOURNAL.md`
+
+What changed:
+- В **dev** `webpack.watchOptions.ignored` дополнены **RegExp** для `X:\hiberfil.sys`, `pagefile.sys`, `swapfile.sys`, `DumpStack.log.tmp` и `X:\System Volume Information`, чтобы реже сыпался **Watchpack Error EINVAL** на первичном скане.
+
+Note:
+- Ошибки **Prisma `Can't reach database server at localhost:5432`** лечатся запуском Postgres/Docker (`docker start diploma-postgres` и т.д.), не конфигом Next.

@@ -14,6 +14,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const DRY_RUN = process.argv.includes('--dry-run');
 const SCOPE = 'GLOBAL';
+const WIKIPEDIA_SEARCH_PREFIX = 'https://en.wikipedia.org/w/index.php?title=Special:Search&search=';
 
 const FACILITIES = [
   // ── Major Data Centers ──
@@ -61,6 +62,34 @@ const FACILITIES = [
   { name: 'CATNIX Barcelona', type: 'PROVIDER', lat: 41.3874, lng: 2.1686, operator: 'CATNIX', year: 2003, capacity: '0.2+ Тбит/с', description: 'Каталонская точка обмена трафиком', country: 'Испания' },
 ];
 
+function wikipediaSearchUrl(query) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+  return `${WIKIPEDIA_SEARCH_PREFIX}${encodeURIComponent(q)}`;
+}
+
+function awsRegionSourceUrl(name) {
+  const m = String(name).match(/\b([a-z]{2}-[a-z]+-\d)\b/i);
+  if (!m) return null;
+  const region = m[1].toLowerCase();
+  return `https://aws.amazon.com/about-aws/global-infrastructure/regions_az/${encodeURIComponent(region)}/`;
+}
+
+function buildProviderSourceUrl(operator) {
+  const fallback = wikipediaSearchUrl(operator);
+  return fallback ?? null;
+}
+
+function buildFacilitySourceUrl(facility) {
+  if (facility.operator === 'Amazon Web Services') {
+    const awsRegion = awsRegionSourceUrl(facility.name);
+    if (awsRegion) return awsRegion;
+  }
+  const specific = wikipediaSearchUrl(facility.name);
+  if (specific) return specific;
+  return buildProviderSourceUrl(facility.operator);
+}
+
 async function main() {
   console.log(`Facilities to process: ${FACILITIES.length}`);
 
@@ -79,12 +108,15 @@ async function main() {
       const providerId = `major-dc-provider-${provKey.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
       const provider = await prisma.networkProvider.upsert({
         where: { id: providerId },
-        update: { name: provKey },
+        update: {
+          name: provKey,
+          sourceUrl: buildProviderSourceUrl(provKey),
+        },
         create: {
           id: providerId,
           name: provKey,
           scope: SCOPE,
-          sourceUrl: 'https://en.wikipedia.org/wiki/Internet_exchange_point',
+          sourceUrl: buildProviderSourceUrl(provKey),
         },
       });
       providerCache.set(provKey, provider.id);
@@ -100,6 +132,7 @@ async function main() {
         type: f.type,
         lat: f.lat,
         lng: f.lng,
+        sourceUrl: buildFacilitySourceUrl(f),
         providerId,
         metadata: {
           operator: f.operator,
@@ -118,6 +151,7 @@ async function main() {
         providerId,
         lat: f.lat,
         lng: f.lng,
+        sourceUrl: buildFacilitySourceUrl(f),
         metadata: {
           operator: f.operator,
           year: f.year,

@@ -9,29 +9,39 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const pubkey = searchParams.get('pubkey');
   if (!pubkey) {
-    return NextResponse.json({ error: 'missing pubkey' }, { status: 400 });
+    return NextResponse.json({ error: 'missing pubkey' }, { status: 400, headers: { 'cache-control': 'no-store' } });
   }
 
   const user = await prisma.user.findUnique({
     where: { pubkey },
-    select: { pubkey: true, username: true, usernameSetAt: true, createdAt: true },
+    select: { pubkey: true, username: true, usernameSetAt: true, createdAt: true, bannedAt: true },
   });
 
   if (!user) {
-    return NextResponse.json({
-      pubkey,
-      username: null,
-      usernameSetAt: null,
-      createdAt: null,
-      inDatabase: false,
-    });
+    return NextResponse.json(
+      {
+        pubkey,
+        username: null,
+        usernameSetAt: null,
+        createdAt: null,
+        inDatabase: false,
+        isBanned: false,
+      },
+      { headers: { 'cache-control': 'no-store' } },
+    );
   }
 
-  return NextResponse.json({
-    pubkey: user.pubkey,
-    username: user.username,
-    usernameSetAt: user.usernameSetAt?.toISOString() ?? null,
-    createdAt: user.createdAt.toISOString(),
-    inDatabase: true,
-  });
+  const isBanned = user.bannedAt != null;
+
+  return NextResponse.json(
+    {
+      pubkey: user.pubkey,
+      username: user.username,
+      usernameSetAt: user.usernameSetAt?.toISOString() ?? null,
+      createdAt: user.createdAt.toISOString(),
+      inDatabase: true,
+      isBanned,
+    },
+    { headers: { 'cache-control': 'no-store' } },
+  );
 }

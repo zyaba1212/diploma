@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
+import { resetAuthSessionClient } from '@/lib/auth-session';
 import { buildUsernameMessage, normalizeUsername, validateUsernameFormat } from '@/lib/username';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
@@ -14,6 +16,7 @@ type ProfileJson = {
   username: string | null;
   usernameSetAt: string | null;
   inDatabase?: boolean;
+  isBanned?: boolean;
 };
 
 type ProposalListItem = {
@@ -34,7 +37,12 @@ const STATUS_BADGE: Record<string, { label: string; bg: string; color: string }>
   ACCEPTED: { label: 'Принято', bg: 'rgba(80,200,120,0.2)', color: '#8fdf9a' },
   REJECTED: { label: 'Отклонено', bg: 'rgba(255,100,100,0.18)', color: '#ff9a9a' },
   APPLIED: { label: 'Применено', bg: 'rgba(200,160,255,0.15)', color: '#d4b8ff' },
+  CANCELLED: { label: 'Отменено', bg: 'rgba(140,140,140,0.2)', color: '#c0c0c0' },
 };
+
+function proposalStatusAllowsAuthorDelete(status: string) {
+  return !['ACCEPTED', 'APPLIED'].includes(status);
+}
 
 function statusBadge(status: string) {
   return STATUS_BADGE[status] ?? { label: status, bg: 'rgba(160,160,170,0.15)', color: 'var(--muted)' };
@@ -48,22 +56,33 @@ function formatDate(iso: string) {
 export default function CabinetPage() {
   const wallet = useWallet();
   const pubkey = useAuthorPubkey();
+  const sessionVerified = useSessionVerified();
   const [profile, setProfile] = useState<ProfileJson | null>(null);
   const [nick, setNick] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
-  const canEditUsername = wallet.connected && !!wallet.signMessage;
+  const canEditUsername =
+    wallet.connected && !!wallet.signMessage && sessionVerified && profile?.isBanned !== true;
 
   const [proposals, setProposals] = useState<ProposalListItem[]>([]);
   const [actionCounts, setActionCounts] = useState<Record<string, number>>({});
   const [proposalsLoading, setProposalsLoading] = useState(false);
   const [proposalsError, setProposalsError] = useState<string | null>(null);
+  const [proposalDeleteBusyId, setProposalDeleteBusyId] = useState<string | null>(null);
+  const [proposalDeleteErr, setProposalDeleteErr] = useState<string | null>(null);
 
   const loadProfile = useCallback(async () => {
     if (!pubkey) { setProfile(null); return; }
-    const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`);
+    const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`, { cache: 'no-store' });
     if (!res.ok) { setStatus('не удалось загрузить профиль'); return; }
-    setProfile((await res.json()) as ProfileJson);
+    const data = (await res.json()) as ProfileJson;
+    if (data.isBanned) {
+      resetAuthSessionClient();
+      setStatus('Аккаунт заблокирован администратором.');
+    } else {
+      setStatus((prev) => (prev === 'Аккаунт заблокирован администратором.' ? '' : prev));
+    }
+    setProfile(data);
   }, [pubkey]);
 
   useEffect(() => { void loadProfile(); }, [loadProfile]);
@@ -117,6 +136,10 @@ export default function CabinetPage() {
       setStatus('нужен подключённый кошелёк с подписью');
       return;
     }
+    if (!sessionVerified) {
+      setStatus('нажмите «Авторизоваться» в шапке сайта');
+      return;
+    }
     const u = normalizeUsername(nick);
     const v = validateUsernameFormat(u);
     if (!v.ok) { setStatus(v.error); return; }
@@ -140,7 +163,46 @@ export default function CabinetPage() {
     } catch (e: unknown) {
       setStatus(e instanceof Error ? e.message : 'ошибка');
     } finally { setBusy(false); }
-  }, [nick, pubkey, wallet, loadProfile]);
+  }, [nick, pubkey, wallet, loadProfile, sessionVerified]);
+
+  const deleteProposal = useCallback(
+    async (p: ProposalListItem) => {
+      if (!pubkey || !wallet.signMessage) {
+        setProposalDeleteErr('Нужен кошелёк с поддержкой подписи сообщения.');
+        return;
+      }
+      if (!sessionVerified) {
+        setProposalDeleteErr('Нажмите «Авторизоваться» в шапке сайта.');
+        return;
+      }
+      if (!proposalStatusAllowsAuthorDelete(p.status)) {
+        setProposalDeleteErr('Нельзя удалить принятое или применённое предложение.');
+        return;
+      }
+      if (!window.confirm('Удалить предложение безвозвратно из базы данных?')) return;
+      setProposalDeleteBusyId(p.id);
+      setProposalDeleteErr(null);
+      try {
+        const message = `diploma-z96a propose:delete:${p.id}`;
+        const sigBytes = await wallet.signMessage(new TextEncoder().encode(message));
+        const res = await fetch(`/api/proposals/${encodeURIComponent(p.id)}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ authorPubkey: pubkey, signature: bs58.encode(sigBytes) }),
+        });
+        if (!res.ok) {
+          const d = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(d.error || `HTTP ${res.status}`);
+        }
+        await loadProposals();
+      } catch (e: unknown) {
+        setProposalDeleteErr(e instanceof Error ? e.message : 'Ошибка удаления');
+      } finally {
+        setProposalDeleteBusyId(null);
+      }
+    },
+    [pubkey, wallet, sessionVerified, loadProposals],
+  );
 
   return (
     <div
@@ -158,14 +220,19 @@ export default function CabinetPage() {
                   <span style={{ color: 'var(--muted)' }}>username:</span>{' '}
                   {profile?.username ?? '—'}
                 </div>
-                {profile?.inDatabase === false && (
+                {profile?.isBanned && (
+                  <p style={{ fontSize: 12, color: 'var(--danger, #ff6b6b)', marginTop: 8 }}>
+                    Аккаунт заблокирован: действия от имени этого кошелька на сайте недоступны.
+                  </p>
+                )}
+                {profile?.inDatabase === false && !profile?.isBanned && (
                   <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
-                    Записи в БД ещё нет — нажмите &laquo;Авторизовать&raquo; в блоке кошелька или сохраните ник ниже.
+                    Записи в БД ещё нет — нажмите &laquo;Авторизоваться&raquo; в блоке кошелька или сохраните ник ниже.
                   </p>
                 )}
               </div>
               {profile ? (
-                canEditUsername ? (
+                profile.isBanned ? null : canEditUsername ? (
                   <div className="cabinet-username-form" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320 }}>
                     <label style={{ fontSize: 12, color: 'var(--muted)' }}>
                       Username (3-32: латиница, цифры, _)
@@ -178,7 +245,9 @@ export default function CabinetPage() {
                     </Button>
                   </div>
                 ) : (
-                  <p style={{ fontSize: 12, color: 'var(--muted)' }}>Нужен подключённый кошелёк с подписью</p>
+                  <p style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    Нужен подключённый кошелёк с подписью и активная авторизация сеанса
+                  </p>
                 )
               ) : (
                 <p style={{ fontSize: 13, color: 'var(--muted)' }}>Загрузка профиля...</p>
@@ -186,13 +255,26 @@ export default function CabinetPage() {
             </>
           )}
           {status && (
-            <p style={{ fontSize: 12, marginTop: 8, color: status.includes('сохран') ? '#8f8' : 'var(--muted)' }}>
+            <p
+              style={{
+                fontSize: 12,
+                marginTop: 8,
+                color: status.includes('сохран')
+                  ? '#8f8'
+                  : status.includes('заблокирован')
+                    ? 'var(--danger, #ff6b6b)'
+                    : 'var(--muted)',
+              }}
+            >
               {status}
             </p>
           )}
         </Panel>
 
         <Panel title="Мои предложения">
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4, marginBottom: 10, lineHeight: 1.45 }}>
+            Черновики и отклонённые не попадают на публичный список «Предложенные сети», но хранятся здесь, пока вы их не удалите.
+          </p>
           {!pubkey ? (
             <p style={{ fontSize: 13, color: 'var(--muted)' }}>Подключите кошелёк</p>
           ) : proposalsLoading ? (
@@ -206,27 +288,70 @@ export default function CabinetPage() {
               {proposals.map((p) => {
                 const badge = statusBadge(p.status);
                 const count = actionCounts[p.id] ?? 0;
+                const showDelete =
+                  proposalStatusAllowsAuthorDelete(p.status) && sessionVerified && !!wallet.signMessage;
                 return (
-                  <Link key={p.id} href={`/networks/${p.id}`}
+                  <div
+                    key={p.id}
                     className="cabinet-proposal-card"
-                    style={{ display: 'block', border: '1px solid var(--border)', borderRadius: 10, padding: 10, textDecoration: 'none', color: 'inherit', background: 'rgba(255,255,255,0.03)' }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'stretch',
+                      gap: 10,
+                      border: '1px solid var(--border)',
+                      borderRadius: 10,
+                      padding: 10,
+                      background: 'rgba(255,255,255,0.03)',
+                    }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.3 }}>
-                        {p.title?.trim() || 'Без названия'}
+                    <Link
+                      href={`/networks/${p.id}`}
+                      style={{ flex: 1, minWidth: 0, textDecoration: 'none', color: 'inherit' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.3 }}>
+                          {p.title?.trim() || 'Без названия'}
+                        </div>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: 8,
+                            flexShrink: 0,
+                            background: badge.bg,
+                            color: badge.color,
+                          }}
+                        >
+                          {badge.label}
+                        </span>
                       </div>
-                      <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 8, flexShrink: 0, background: badge.bg, color: badge.color }}>
-                        {badge.label}
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+                        {formatDate(p.createdAt)} &middot; элементов: {count}
+                      </div>
+                    </Link>
+                    {showDelete ? (
+                      <Button
+                        type="button"
+                        onClick={() => void deleteProposal(p)}
+                        disabled={proposalDeleteBusyId === p.id}
+                        style={{ flexShrink: 0, alignSelf: 'center' }}
+                      >
+                        {proposalDeleteBusyId === p.id ? '…' : 'Удалить'}
+                      </Button>
+                    ) : proposalStatusAllowsAuthorDelete(p.status) ? (
+                      <span style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center', maxWidth: 100, flexShrink: 0 }}>
+                        Авторизуйтесь, чтобы удалить
                       </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
-                      {formatDate(p.createdAt)} &middot; элементов: {count}
-                    </div>
-                  </Link>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
           )}
+          {proposalDeleteErr ? (
+            <p style={{ fontSize: 12, color: '#f88', marginTop: 10 }}>{proposalDeleteErr}</p>
+          ) : null}
           <div style={{ marginTop: 12 }}>
             <Link href="/sandbox" style={{ fontSize: 13, fontWeight: 600, color: '#8ab4f8', textDecoration: 'none' }}>
               Создать новое &rarr;

@@ -1,6 +1,32 @@
 import path from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
+
+const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Same idea as Next: .env then .env.local (local overrides). */
+function loadEnvFromFile(fileName, overrideExisting) {
+  const full = path.join(projectRoot, fileName);
+  if (!existsSync(full)) return;
+  const text = readFileSync(full, "utf8");
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let val = trimmed.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
+      val = val.slice(1, -1);
+    if (overrideExisting || process.env[key] === undefined) process.env[key] = val;
+  }
+}
+
+loadEnvFromFile(".env", false);
+loadEnvFromFile(".env.local", true);
 
 const prisma = new PrismaClient();
 
@@ -126,6 +152,12 @@ async function main() {
   if (importDatacenters) {
     await runNodeScript("scripts/sync-major-datacenters.mjs", []);
   }
+
+  /** Референсное предложение: устойчивая сеть по РБ (mesh, SMS, офлайн-очереди, VSAT, кабели). */
+  if (envBool("SEED_BELARUS_PROPOSAL", true)) {
+    await runNodeScript("scripts/seed-belarus-proposal.mjs", []);
+  }
+
 }
 
 main().catch(async (e) => {

@@ -1,9 +1,13 @@
 'use client';
+// Провайдеры React (кошелёк, контексты).
+
 
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { useMemo } from 'react';
+import { AuthSessionCoordinator } from '@/components/AuthSessionCoordinator';
+import { BannedRedirectGuard } from '@/components/BannedRedirectGuard';
 import { WalletIdleAutoconnect } from '@/components/WalletIdleAutoconnect';
 import { WalletStaleAutoconnectGuard } from '@/components/WalletStaleAutoconnectGuard';
 
@@ -20,6 +24,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <SafeConnectionProvider endpoint={endpoint}>
       <WalletStaleAutoconnectGuard>
         <SafeWalletProvider wallets={wallets} autoConnect>
+          <AuthSessionCoordinator />
+          <BannedRedirectGuard />
           <WalletIdleAutoconnect />
           <SafeWalletModalProvider>{children}</SafeWalletModalProvider>
         </SafeWalletProvider>

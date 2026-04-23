@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { prisma } from '@/lib/prisma';
+import { isUserBanned, userBannedResponseOk } from '@/lib/user-ban';
 import { buildUsernameMessage, normalizeUsername, validateUsernameFormat } from '@/lib/username';
 
 type Body = {
@@ -62,6 +63,10 @@ export async function POST(req: Request) {
     }
     if (msgPub !== publicKey || msgUser !== username) {
       return NextResponse.json({ ok: false, error: 'message does not match payload' }, { status: 400 });
+    }
+
+    if (await isUserBanned(publicKey)) {
+      return userBannedResponseOk();
     }
 
     const existing = await prisma.user.findUnique({

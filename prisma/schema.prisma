@@ -37,6 +37,8 @@ enum NetworkElementType {
   MULTIPLEXER
   DEMULTIPLEXER
   REGENERATOR
+  /// Точка регенерации на кабельной трассе (данные импорта; визуально как регенератор)
+  REGENERATION_POINT
   MODEM
 
   CABLE_UNDERGROUND_COPPER
@@ -44,6 +46,8 @@ enum NetworkElementType {
 
   BASE_STATION
   SATELLITE
+  /// Спутники группы «Рассвет» (и др.) — отдельный маркер в данных импорта
+  SATELLITE_RASSVET
   EQUIPMENT
 
   // Offline-transaction-specific types
@@ -58,15 +62,75 @@ enum VoteType {
   AGAINST
 }
 
+enum StaffRole {
+  ADMIN
+  MODERATOR
+}
+
+enum AuditActorType {
+  STAFF
+  SYSTEM
+}
+
 model User {
-  id        String   @id @default(cuid())
-  pubkey    String   @unique
+  id            String    @id @default(cuid())
+  pubkey        String    @unique
   /// Уникальный ник на сайте (nullable до первой установки)
-  username     String?   @unique
+  username      String?   @unique
   usernameSetAt DateTime?
+
+  /// Stage 13 — бан пользователя администратором
+  bannedAt     DateTime?
+  bannedReason String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  moderatorGrant ModeratorGrant?
+
+  @@index([bannedAt])
+}
+
+/// Серверная сессия входа в /admin (httpOnly cookie → token, в БД только хэш).
+model StaffSession {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  role      StaffRole @default(ADMIN)
+  /// Stage 13 — pubkey владельца staff-сессии (для вход по Phantom); null для пароля ADMIN.
+  pubkey    String?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  moderatorGrantsGranted ModeratorGrant[] @relation("GrantedByStaffSession")
+  cancelledProposals     Proposal[]       @relation("CancelledByStaffSession")
+  auditLogs              AuditLog[]       @relation("AuditStaffSession")
+
+  @@index([role])
+  @@index([expiresAt])
+}
+
+/// Лог успешных пользовательских входов через /api/auth/verify.
+model UserAuthSession {
+  id        String   @id @default(cuid())
+  pubkey    String
+  /// IP для оперативной диагностики; nullable чтобы не ломаться при отсутствии заголовков.
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([pubkey, createdAt])
+  @@index([createdAt])
+}
+
+/// Модератор назначается админом только для существующего User (pubkey уже в БД).
+model ModeratorGrant {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  grantedAt               DateTime      @default(now())
+  grantedByStaffSessionId String?
+  grantedByStaffSession   StaffSession? @relation("GrantedByStaffSession", fields: [grantedByStaffSessionId], references: [id], onDelete: SetNull)
+
+  @@index([grantedAt])
 }
 
 model NetworkProvider {
@@ -88,8 +152,9 @@ model NetworkElement {
   providerId String?
   provider   NetworkProvider?   @relation(fields: [providerId], references: [id], onDelete: SetNull)
 
-  name     String?
-  sourceId String? @unique
+  name      String?
+  sourceId  String? @unique
+  sourceUrl String?
 
   lat      Float?
   lng      Float?
@@ -112,7 +177,7 @@ model NetworkElement {
 }
 
 model Proposal {
-  id           String          @id @default(cuid())
+  id           String         @id @default(cuid())
   scope        Scope
   authorPubkey String
   status       ProposalStatus
@@ -120,34 +185,46 @@ model Proposal {
   description  String?
 
   // Stage 6 submission facts (kept optional so Stage 5 draft creation works)
-  contentHash         String?
-  signature           String? // base58 signature over contentHash
-  onChainTxSignature  String?
-  onChainSubmittedAt  DateTime?
+  contentHash        String?
+  signature          String? // base58 signature over contentHash
+  onChainTxSignature String?
+  onChainSubmittedAt DateTime?
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   submittedAt DateTime?
   decidedAt   DateTime?
 
   votingEndsAt DateTime?
 
-  actions ChangeAction[]
-  votes   Vote[]
+  /// Показывать вверху списка предложений (референсный кейс диплома и т.п.).
+  pinned Boolean @default(false)
+
+  /// Stage 13 — аудит принудительной отмены администратором.
+  cancelledByStaffSessionId String?
+  cancelledByStaffSession   StaffSession? @relation("CancelledByStaffSession", fields: [cancelledByStaffSessionId], references: [id], onDelete: SetNull)
+  cancelReason              String?
+  /// Комментарий модератора при REJECTED / DRAFT-возврате.
+  rejectionReason           String?
+
+  actions   ChangeAction[]
+  votes     Vote[]
+  feedbacks ProposalFeedback[]
+
+  moderationDecision ModerationDecision?
 
   @@index([authorPubkey, status])
   @@index([status, createdAt])
   @@index([authorPubkey, status, createdAt])
+  @@index([pinned, createdAt])
   @@index([onChainTxSignature])
   @@index([onChainSubmittedAt])
-
-  moderationDecision ModerationDecision?
 }
 
 model ChangeAction {
-  id              String           @id @default(cuid())
-  proposalId      String
-  proposal        Proposal         @relation(fields: [proposalId], references: [id])
+  id         String   @id @default(cuid())
+  proposalId String
+  proposal   Proposal @relation(fields: [proposalId], references: [id])
 
   actionType      ChangeActionType
   targetElementId String?
@@ -163,16 +240,16 @@ model ChangeAction {
 }
 
 model HistoryEntry {
-  id               String        @id @default(cuid())
-  proposalId       String
+  id         String @id @default(cuid())
+  proposalId String
 
-  actionId         String
+  actionId String
 
-  appliedByPubkey  String?
-  appliedAt        DateTime
+  appliedByPubkey String?
+  appliedAt       DateTime
 
   // Stored diff/snapshot sufficient for rollback to restore NetworkElement state.
-  diff             Json
+  diff Json
 
   @@index([proposalId])
   @@index([actionId])
@@ -182,17 +259,20 @@ model HistoryEntry {
 }
 
 model ModerationDecision {
-  id             String        @id @default(cuid())
-  proposalId     String        @unique
-  proposal       Proposal      @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  proposalId String   @unique
+  proposal   Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
 
   moderatorPubkey String
-  fromStatus     ProposalStatus
-  toStatus       ProposalStatus
-  decidedAt      DateTime      @default(now())
+  fromStatus      ProposalStatus
+  toStatus        ProposalStatus
+  decidedAt       DateTime       @default(now())
 
   // Optional: admin/operator signature or other proof artifact (base58/txSignature etc.)
   decisionSignature String?
+
+  /// Stage 13 — свободный комментарий модератора (видимый в журнале и автору).
+  comment String?
 
   @@index([moderatorPubkey, decidedAt])
   @@index([toStatus, decidedAt])
@@ -225,3 +305,36 @@ model NewsCache {
   @@index([source])
 }
 
+/// Stage 13 — единый журнал действий staff (админов и модераторов).
+model AuditLog {
+  id             String         @id @default(cuid())
+  actorType      AuditActorType
+  staffSessionId String?
+  staffSession   StaffSession?  @relation("AuditStaffSession", fields: [staffSessionId], references: [id], onDelete: SetNull)
+  /// Pubkey актора на момент действия (staff-сессия может быть удалена позже).
+  actorPubkey    String?
+  /// Короткий идентификатор действия, например `moderator.assign`, `user.ban`, `proposal.force_cancel`.
+  action         String
+  targetType     String?
+  targetId       String?
+  meta           Json?
+  at             DateTime       @default(now())
+
+  @@index([at])
+  @@index([action, at])
+  @@index([staffSessionId])
+  @@index([targetType, targetId])
+  @@index([actorPubkey, at])
+}
+
+/// Stage 13 — комментарии модератора/админа к предложению (request changes).
+model ProposalFeedback {
+  id              String   @id @default(cuid())
+  proposalId      String
+  proposal        Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  moderatorPubkey String
+  text            String
+  createdAt       DateTime @default(now())
+
+  @@index([proposalId, createdAt])
+}

@@ -316,14 +316,14 @@ async function main() {
     where: { id: providerId },
     update: {
       name: PROVIDER_NAME,
-      sourceUrl: upserts.length === 0 ? `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE})` : `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE}; fallback if needed)`,
+      sourceUrl: PROVIDER_SOURCE_URL,
       scope,
     },
     create: {
       id: providerId,
       name: PROVIDER_NAME,
       scope,
-      sourceUrl: `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE}; fallback if needed)`,
+      sourceUrl: PROVIDER_SOURCE_URL,
     },
   });
 

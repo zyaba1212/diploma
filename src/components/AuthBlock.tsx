@@ -2,21 +2,24 @@
 
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import bs58 from 'bs58';
 import { useCallback, useEffect, useState } from 'react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
+import { resetAuthSessionClient, signAndVerifyAuthSession } from '@/lib/auth-session';
 import { Button } from './ui/Button';
 
 type ProfileJson = {
   username: string | null;
   usernameSetAt: string | null;
   inDatabase?: boolean;
+  isBanned?: boolean;
 };
 
 export function AuthBlock() {
   const wallet = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const pubkey = useAuthorPubkey();
+  const sessionVerified = useSessionVerified();
   const [status, setStatus] = useState<string>('не авторизован');
   const [busy, setBusy] = useState(false);
   const [connBusy, setConnBusy] = useState(false);
@@ -37,12 +40,15 @@ export function AuthBlock() {
     }
     setProfileLoading(true);
     try {
-      const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`);
+      const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`, { cache: 'no-store' });
       if (!res.ok) {
         setProfile(null);
         return;
       }
       const json = (await res.json()) as ProfileJson;
+      if (json.isBanned) {
+        resetAuthSessionClient();
+      }
       setProfile(json);
     } catch {
       setProfile(null);
@@ -80,25 +86,13 @@ export function AuthBlock() {
 
     setBusy(true);
     try {
-      const message = `diploma-z96a auth\npubkey=${pubkey}\nts=${new Date().toISOString()}`;
-      const encoded = new TextEncoder().encode(message);
-      const signature = await wallet.signMessage(encoded);
-
-      const res = await fetch('/api/auth/verify', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          publicKey: pubkey,
-          message,
-          signature: bs58.encode(signature),
-        }),
-      });
-      const json = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      setStatus('авторизован');
-      // Update profile UI (Cabinet listens to auth:verified as well).
+      const result = await signAndVerifyAuthSession(pubkey, wallet.signMessage);
+      if (result === 'banned') {
+        setStatus('Аккаунт заблокирован администратором.');
+        return;
+      }
+      if (result !== 'ok') throw new Error('подпись отклонена или ошибка сети');
       await loadProfile();
-      window.dispatchEvent(new CustomEvent('auth:verified', { detail: { pubkey } }));
     } catch (e: unknown) {
       setStatus(safeErrorMessage(e));
     } finally {
@@ -140,6 +134,7 @@ export function AuthBlock() {
     setBusy(true);
     try {
       setStatus('отключение…');
+      resetAuthSessionClient();
       await wallet.disconnect();
       setStatus('не авторизован');
       setProfile(null);
@@ -168,7 +163,13 @@ export function AuthBlock() {
             ) : (
               <span>username: {profile?.username ?? '—'}</span>
             )}
-            <span style={{ marginLeft: 6, opacity: 0.85 }}>{status}</span>
+            <span style={{ marginLeft: 6, opacity: 0.85 }}>
+              {profile?.isBanned
+                ? 'заблокирован'
+                : sessionVerified && profile?.inDatabase
+                  ? 'авторизован'
+                  : status}
+            </span>
           </>
         ) : wallet.connecting ? (
           'подключение…'
@@ -188,8 +189,16 @@ export function AuthBlock() {
           </Button>
         ) : (
           <>
-            <Button type="button" onClick={() => void authorize()} disabled={busy || status === 'авторизован'}>
-              Авторизовать
+            <Button
+              type="button"
+              onClick={() => void authorize()}
+              disabled={
+                busy ||
+                profile?.isBanned === true ||
+                (sessionVerified && profile?.inDatabase === true)
+              }
+            >
+              Авторизоваться
             </Button>
             <Button
               type="button"

@@ -1,17 +1,29 @@
 'use client';
+// Страница /networks/[id] — UI Next.js App Router.
+
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import Link from 'next/link';
 import { EQUIPMENT_FACTORIES, NODE_VISUALS, CABLE_COLORS, TYPE_LABELS_RU, createSatelliteObject } from '@/lib/three/factories';
-import { latLngToVec3, orientGlobeGroupCenterFromLatLng, makeTextSprite, makeTextMesh, disposeThreeObject, computeGlobeCenterLatLng } from '@/lib/three/utils';
-import { WORLD_LABELS, LABEL_STYLE } from '@/lib/three/labels';
+import { latLngToVec3, orientGlobeGroupCenterFromLatLng, makeTextMesh, disposeThreeObject, computeGlobeCenterLatLng } from '@/lib/three/utils';
+import { attachGlobeTrackballControls } from '@/lib/three/globeTrackballControls';
+import { WORLD_LABELS } from '@/lib/three/labels';
 import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality';
 import { loadEarthTextures } from '@/lib/loadEarthTextures';
+import {
+  GLOBE_SCENE_BACKGROUND_HEX,
+  GLOBE_DEFAULT_CENTER,
+  applyLoadedEarthTextures,
+  updateGlobeFrontLabelsVisibility,
+  type GlobeLabelCandidate,
+} from '@/lib/three/globeAppearance';
 import { Button } from '@/components/ui/Button';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
+import { foldProposalActionsForDisplay } from '@/lib/stage7/proposalActionFold';
 import type L from 'leaflet';
 
 type ViewMode = 'GLOBE_3D' | 'MAP_2D';
@@ -28,7 +40,9 @@ type ProposalData = {
 };
 
 type ActionData = {
+  id: string;
   actionType: string;
+  targetElementId?: string | null;
   elementPayload: Record<string, unknown>;
 };
 
@@ -44,9 +58,11 @@ function isCableType(t: string) {
 
 export default function ProposalViewPage() {
   const params = useParams();
+  const router = useRouter();
   const id = typeof params.id === 'string' ? params.id : '';
   const { publicKey, signMessage } = useWallet();
   const pubkey = publicKey?.toBase58() ?? '';
+  const sessionVerified = useSessionVerified();
 
   const [proposal, setProposal] = useState<ProposalData | null>(null);
   const [tally, setTally] = useState<VoteTally | null>(null);
@@ -56,14 +72,12 @@ export default function ProposalViewPage() {
   const [voting, setVoting] = useState(false);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [authorName, setAuthorName] = useState<string>('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [locationLabel, setLocationLabel] = useState('Определяем локацию…');
-  const [userLat, setUserLat] = useState<number | null>(null);
-  const [userLng, setUserLng] = useState<number | null>(null);
-
   const threeContainerRef = useRef<HTMLDivElement>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -76,48 +90,13 @@ export default function ProposalViewPage() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const leafletRef = useRef<typeof import('leaflet') | null>(null);
   const zoomLevelRef = useRef(3);
-  const savedCenterRef = useRef<{ lat: number; lng: number }>({ lat: 53.5, lng: 28 });
+  const savedCenterRef = useRef<{ lat: number; lng: number }>({
+    lat: GLOBE_DEFAULT_CENTER.lat,
+    lng: GLOBE_DEFAULT_CENTER.lng,
+  });
+  const map2DZoom12FromGlobeRef = useRef(false);
 
-  const labelCandidatesRef = useRef<Array<{
-    obj: THREE.Object3D;
-    latRad: number;
-    lngRad: number;
-    sinLat: number;
-    cosLat: number;
-  }>>([]);
-
-  // Geolocation
-  useEffect(() => {
-    if (!navigator.geolocation) {
-      setLocationLabel('Геолокация недоступна');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        setUserLat(lat);
-        setUserLng(lng);
-        fetch(`/api/geocode/reverse?lat=${lat}&lon=${lng}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(d => {
-            if (d) {
-              const addr = d.address ?? {};
-              const city = addr.city || addr.town || addr.village || addr.hamlet;
-              const region = addr.state || addr.region;
-              const country = addr.country;
-              const parts = [city, region, country].filter(Boolean);
-              setLocationLabel(parts.length ? parts.join(', ') : d.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`);
-            } else {
-              setLocationLabel(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
-            }
-          })
-          .catch(() => setLocationLabel(`${lat.toFixed(4)}, ${lng.toFixed(4)}`));
-      },
-      () => setLocationLabel('Геолокация недоступна (требуется HTTPS или разрешение браузера)'),
-      { enableHighAccuracy: false, timeout: 8000 },
-    );
-  }, []);
+  const labelCandidatesRef = useRef<GlobeLabelCandidate[]>([]);
 
   // Load proposal
   useEffect(() => {
@@ -173,7 +152,7 @@ export default function ProposalViewPage() {
   }, [viewMode]);
 
   const handleVote = useCallback(async (voteType: 'FOR' | 'AGAINST') => {
-    if (!publicKey || !signMessage || !id) return;
+    if (!publicKey || !signMessage || !id || !sessionVerified) return;
     setVoting(true); setVoteError(null);
     try {
       const message = `diploma-z96a vote:${id}:${voteType.toLowerCase()}`;
@@ -191,23 +170,35 @@ export default function ProposalViewPage() {
     } catch (e: unknown) {
       setVoteError(e instanceof Error ? e.message : 'Ошибка');
     } finally { setVoting(false); }
-  }, [publicKey, signMessage, id, pubkey]);
+  }, [publicKey, signMessage, id, pubkey, sessionVerified]);
 
-  const proposalElements = proposal?.actions
-    .filter(a => a.actionType === 'CREATE' && a.elementPayload)
-    .map(a => a.elementPayload) ?? [];
+  const proposalElements =
+    proposal?.actions?.length ?
+      foldProposalActionsForDisplay(
+        proposal.actions.map(a => ({
+          id: a.id,
+          actionType: a.actionType,
+          targetElementId: a.targetElementId,
+          elementPayload: a.elementPayload,
+        })),
+      )
+    : [];
 
   const getGlobeCenterLatLng = useCallback((): { lat: number; lng: number } => {
     if (globeGroupRef.current) {
-      return computeGlobeCenterLatLng(globeGroupRef.current) ?? { lat: 53.5, lng: 28 };
+      return computeGlobeCenterLatLng(globeGroupRef.current) ?? {
+        lat: GLOBE_DEFAULT_CENTER.lat,
+        lng: GLOBE_DEFAULT_CENTER.lng,
+      };
     }
-    return { lat: 53.5, lng: 28 };
+    return { lat: GLOBE_DEFAULT_CENTER.lat, lng: GLOBE_DEFAULT_CENTER.lng };
   }, []);
 
   const handleToggleView = useCallback((target: ViewMode) => {
     if (target === viewMode) return;
     if (target === 'MAP_2D') {
       savedCenterRef.current = getGlobeCenterLatLng();
+      map2DZoom12FromGlobeRef.current = true;
       setViewMode('MAP_2D');
       threeInitRef.current = false;
     } else {
@@ -227,7 +218,7 @@ export default function ProposalViewPage() {
     const mount = threeContainerRef.current;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x060a18);
+    scene.background = new THREE.Color(GLOBE_SCENE_BACKGROUND_HEX);
 
     const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 2000);
     camera.position.set(0, 0, zoomLevelRef.current);
@@ -284,22 +275,18 @@ export default function ProposalViewPage() {
 
     loadEarthTextures(renderer).then((set) => {
       if (!set) return;
-      let earthMat: THREE.Material;
-      if (materialMode === 'standard') {
-        earthMat = new THREE.MeshStandardMaterial({
-          map: set.color, normalMap: set.normal, normalScale: new THREE.Vector2(0.055, 0.055),
-          roughness: 0.62, metalness: 0.06, emissive: new THREE.Color(0x0b2d55), emissiveIntensity: 0.42,
-        });
-      } else {
-        earthMat = new THREE.MeshPhongMaterial({
-          map: set.color, normalMap: set.normal, normalScale: new THREE.Vector2(0.04, 0.04),
-          shininess: 15, specular: new THREE.Color(0x2f3b62), emissive: new THREE.Color(0x0e3a6a), emissiveIntensity: 0.35,
-        });
-      }
-      (globeGroup.children[0] as THREE.Mesh).material = earthMat;
-      if (set.clouds) {
-        (globeGroup.children[1] as THREE.Mesh).material = new THREE.MeshPhongMaterial({ map: set.clouds, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
-      }
+      applyLoadedEarthTextures(
+        globeGroup.children[0] as THREE.Mesh<
+          THREE.BufferGeometry,
+          THREE.MeshPhongMaterial | THREE.MeshStandardMaterial
+        >,
+        globeGroup.children[1] as THREE.Mesh<
+          THREE.BufferGeometry,
+          THREE.MeshPhongMaterial | THREE.MeshStandardMaterial
+        >,
+        set,
+        materialMode,
+      );
     });
 
     const clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0.15);
@@ -329,15 +316,16 @@ export default function ProposalViewPage() {
 
         let altitudeKm = 0;
         if (typeof el.altitude === 'number' && Number.isFinite(el.altitude as number)) altitudeKm = el.altitude as number;
-        else if (type === 'SATELLITE') altitudeKm = 550;
-        const nodeR = type === 'SATELLITE' ? 1.0 + altitudeKm / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
+        else if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') altitudeKm = 550;
+        const nodeR =
+          type === 'SATELLITE' || type === 'SATELLITE_RASSVET' ? 1.0 + altitudeKm / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
 
         const pos = latLngToVec3(el.lat as number, el.lng as number, nodeR);
         if (!pos) continue;
         const normal = pos.clone().normalize();
 
         let marker: THREE.Object3D;
-        if (type === 'SATELLITE') {
+        if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') {
           marker = createSatelliteObject(visual.size, visual.color, visual.emissive);
         } else {
           const factory = EQUIPMENT_FACTORIES[type];
@@ -351,17 +339,6 @@ export default function ProposalViewPage() {
         marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
         marker.userData = { elName: el.name, elType: type };
         networkGroup.add(marker);
-
-        const labelText = (el.name as string)?.trim() || TYPE_LABELS_RU[type] || type;
-        const sprite = makeTextSprite(labelText, { background: 'rgba(0,0,0,0.55)', color: '#eaf2ff', fontSize: 18 });
-        sprite.position.copy(pos);
-        sprite.position.add(normal.clone().multiplyScalar(0.03 + visual.size * 0.4));
-        sprite.visible = false;
-        networkGroup.add(sprite);
-
-        const latRad = (el.lat as number) * DEG2RAD;
-        const lngRad = (el.lng as number) * DEG2RAD;
-        labelCandidatesRef.current.push({ obj: sprite, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
       }
     }
 
@@ -377,82 +354,29 @@ export default function ProposalViewPage() {
 
       const latRad = wl.lat * DEG2RAD;
       const lngRad = wl.lng * DEG2RAD;
-      labelCandidatesRef.current.push({ obj: mesh, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
+      labelCandidatesRef.current.push({ sprite: mesh, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
     }
 
-    // Satellites (Starlink etc.)
-    const satelliteCount = 60;
-    for (let i = 0; i < satelliteCount; i++) {
-      const lat = (Math.random() - 0.5) * 140;
-      const lng = Math.random() * 360 - 180;
-      const alt = 540 + Math.random() * 20;
-      const visual = NODE_VISUALS['SATELLITE'];
-      if (!visual) continue;
-      const r = 1.0 + alt / 6371;
-      const pos = latLngToVec3(lat, lng, r);
-      if (!pos) continue;
-      const normal = pos.clone().normalize();
-      const sat = createSatelliteObject(visual.size * 0.6, visual.color, visual.emissive);
-      sat.position.copy(pos);
-      sat.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-      sat.userData = { elName: `Starlink-${i + 1}`, elType: 'SATELLITE' };
-      networkGroup.add(sat);
-    }
-
-    let dragging = false, prevX = 0, prevY = 0;
-    const onPointerDown = (e: PointerEvent) => { if (e.pointerType === 'touch') return; dragging = true; prevX = e.clientX; prevY = e.clientY; };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!dragging || e.pointerType === 'touch') return;
-      const dx = e.clientX - prevX, dy = e.clientY - prevY;
-      prevX = e.clientX; prevY = e.clientY;
-      globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.005));
-      globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.005));
-    };
-    const onPointerUp = (e: PointerEvent) => { if (e.pointerType === 'touch') return; dragging = false; };
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      zoomLevelRef.current = Math.max(1.2, Math.min(6, zoomLevelRef.current + (e.deltaY > 0 ? 0.15 : -0.15)));
-      camera.position.z = zoomLevelRef.current;
-    };
-
-    // Touch controls
-    let touchStartDist = 0;
-    let touchPrevX = 0, touchPrevY = 0;
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        touchPrevX = e.touches[0].clientX;
-        touchPrevY = e.touches[0].clientY;
-      } else if (e.touches.length === 2) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        touchStartDist = Math.sqrt(dx * dx + dy * dy);
-      }
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      e.preventDefault();
-      if (e.touches.length === 1) {
-        const dx = e.touches[0].clientX - touchPrevX;
-        const dy = e.touches[0].clientY - touchPrevY;
-        touchPrevX = e.touches[0].clientX;
-        touchPrevY = e.touches[0].clientY;
-        globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.005));
-        globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.005));
-      } else if (e.touches.length === 2) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const delta = (touchStartDist - dist) * 0.01;
-        zoomLevelRef.current = Math.max(1.2, Math.min(6, zoomLevelRef.current + delta));
-        camera.position.z = zoomLevelRef.current;
-        touchStartDist = dist;
-      }
-    };
+    const globeEarthMesh = globeGroup.children[0] as THREE.Mesh;
+    const trackball = attachGlobeTrackballControls({
+      domElement: renderer.domElement,
+      globeGroup,
+      globeMesh: globeEarthMesh,
+      camera,
+      zoomMin: 1.2,
+      zoomMax: 6,
+      onZoomApplied: (z) => {
+        zoomLevelRef.current = z;
+      },
+    });
 
     // Tooltip
     const tooltipDiv = document.createElement('div');
     tooltipDiv.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;display:none;background:rgba(10,20,45,0.95);border:1px solid rgba(120,160,255,0.3);border-radius:8px;padding:6px 12px;font-size:12px;color:#eaf2ff;max-width:240px;backdrop-filter:blur(6px)';
     document.body.appendChild(tooltipDiv);
     const raycaster = new THREE.Raycaster();
+    raycaster.params.Line = { threshold: 0.012 };
+    const camPos = new THREE.Vector3();
     const onMouseMove = (e: MouseEvent) => {
       const rect = mount.getBoundingClientRect();
       const mouse = new THREE.Vector2(
@@ -460,50 +384,41 @@ export default function ProposalViewPage() {
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       );
       raycaster.setFromCamera(mouse, camera);
+      camera.getWorldPosition(camPos);
       const hits = raycaster.intersectObjects(networkGroup.children, true);
-      if (hits.length > 0) {
-        let obj = hits[0].object;
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
+        if (obj.userData?.__worldLabel) continue;
         while (obj && !obj.userData?.elType && obj.parent && obj.parent !== networkGroup) obj = obj.parent;
-        if (obj?.userData?.elType) {
-          const t = obj.userData.elType as string;
-          const label = TYPE_LABELS_RU[t] || t;
-          const name = obj.userData.elName || '';
-          tooltipDiv.innerHTML = `<b>${label}</b>${name ? `<br/>${name}` : ''}`;
-          tooltipDiv.style.display = 'block';
-          tooltipDiv.style.left = `${e.clientX + 12}px`;
-          tooltipDiv.style.top = `${e.clientY + 12}px`;
-          return;
+        if (!obj?.userData?.elType) continue;
+
+        const isLine =
+          hit.object instanceof THREE.Line ||
+          hit.object instanceof THREE.LineLoop ||
+          hit.object instanceof THREE.LineSegments;
+        if (isLine) {
+          const p = hit.point.clone().normalize();
+          const v = camPos.clone().normalize();
+          if (p.dot(v) < 0.12) continue;
         }
+
+        const t = obj.userData.elType as string;
+        const label = TYPE_LABELS_RU[t] || t;
+        const name = obj.userData.elName || '';
+        tooltipDiv.innerHTML = `<b>${label}</b>${name ? `<br/>${name}` : ''}`;
+        tooltipDiv.style.display = 'block';
+        tooltipDiv.style.left = `${e.clientX + 12}px`;
+        tooltipDiv.style.top = `${e.clientY + 12}px`;
+        return;
       }
       tooltipDiv.style.display = 'none';
     };
 
-    mount.addEventListener('pointerdown', onPointerDown);
-    mount.addEventListener('pointermove', onPointerMove);
-    mount.addEventListener('pointerup', onPointerUp);
-    mount.addEventListener('wheel', onWheel, { passive: false });
-    mount.addEventListener('touchstart', onTouchStart, { passive: true });
-    mount.addEventListener('touchmove', onTouchMove, { passive: false });
     mount.addEventListener('mousemove', onMouseMove);
 
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
-
-      // Update label visibility based on globe center
-      const center = computeGlobeCenterLatLng(globeGroup) ?? { lat: 53.5, lng: 28 };
-      const cLat = center.lat * DEG2RAD;
-      const cLng = center.lng * DEG2RAD;
-      const sinCLat = Math.sin(cLat);
-      const cosCLat = Math.cos(cLat);
-      const zLvl = camera.position.z;
-      const threshold = zLvl < 1.8 ? 0.4 : zLvl < 2.5 ? 0.55 : 0.85;
-
-      for (const lc of labelCandidatesRef.current) {
-        const dLng = lc.lngRad - cLng;
-        const cosD = sinCLat * lc.sinLat + cosCLat * lc.cosLat * Math.cos(dLng);
-        lc.obj.visible = cosD > threshold;
-      }
-
+      updateGlobeFrontLabelsVisibility(labelCandidatesRef.current, globeGroup, camera.position.z);
       renderer.render(scene, camera);
     };
     animate();
@@ -513,12 +428,7 @@ export default function ProposalViewPage() {
 
     return () => {
       cancelAnimationFrame(animFrameRef.current);
-      mount.removeEventListener('pointerdown', onPointerDown);
-      mount.removeEventListener('pointermove', onPointerMove);
-      mount.removeEventListener('pointerup', onPointerUp);
-      mount.removeEventListener('wheel', onWheel);
-      mount.removeEventListener('touchstart', onTouchStart);
-      mount.removeEventListener('touchmove', onTouchMove);
+      trackball.detach();
       mount.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('resize', onResize);
       if (tooltipDiv.parentNode) tooltipDiv.parentNode.removeChild(tooltipDiv);
@@ -545,17 +455,21 @@ export default function ProposalViewPage() {
       if (cancelled || !mapContainerRef.current) return;
 
       const initCenter = savedCenterRef.current;
-      const map = L.map(mapContainerRef.current, { center: [initCenter.lat, initCenter.lng], zoom: 6, zoomControl: false });
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 18 }).addTo(map);
+      const map = L.map(mapContainerRef.current, {
+        center: [initCenter.lat, initCenter.lng],
+        zoom: 6,
+        zoomControl: false,
+        attributionControl: false,
+      });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '', maxZoom: 18 }).addTo(map);
       mapInstanceRef.current = map;
 
       map.whenReady(() => {
         map.invalidateSize();
-
-        if (userLat !== null && userLng !== null) {
-          L.circleMarker([userLat, userLng], {
-            radius: 8, color: '#4285f4', fillColor: '#4285f4', fillOpacity: 0.8, weight: 2,
-          }).addTo(map).bindPopup('Ваше местоположение');
+        if (map2DZoom12FromGlobeRef.current) {
+          const c = savedCenterRef.current;
+          map.setView([c.lat, c.lng], 12);
+          map2DZoom12FromGlobeRef.current = false;
         }
 
         for (const el of proposalElements) {
@@ -572,7 +486,7 @@ export default function ProposalViewPage() {
           } else if (typeof el.lat === 'number' && typeof el.lng === 'number') {
             const v = NODE_VISUALS[type];
             const c = v ? '#' + v.color.toString(16).padStart(6, '0') : '#ff9900';
-            if (type === 'SATELLITE') {
+            if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') {
               L.circleMarker([el.lat as number, el.lng as number], {
                 radius: 5, color: c, fillColor: c, fillOpacity: 0.7, weight: 1,
               }).addTo(map)
@@ -642,15 +556,6 @@ export default function ProposalViewPage() {
     }
   }, [viewMode]);
 
-  const handleGoToLocation = useCallback(() => {
-    if (userLat === null || userLng === null) return;
-    if (viewMode === 'MAP_2D' && mapInstanceRef.current) {
-      mapInstanceRef.current.flyTo([userLat, userLng], 12);
-    } else if (viewMode === 'GLOBE_3D' && globeGroupRef.current) {
-      orientGlobeGroupCenterFromLatLng(globeGroupRef.current, userLat, userLng);
-    }
-  }, [viewMode, userLat, userLng]);
-
   const timeRemaining = proposal?.votingEndsAt
     ? (() => {
         const diff = new Date(proposal.votingEndsAt!).getTime() - Date.now();
@@ -684,29 +589,27 @@ export default function ProposalViewPage() {
             display: flex !important; flex-direction: column !important; overflow-y: auto !important;
           }
           .proposal-sheet-handle { display: block !important; width: 40px; height: 4px; margin: 0 auto 12px; border-radius: 4px; background: rgba(160,170,200,0.45); flex-shrink: 0; }
-          .pv-nav-block { bottom: auto !important; top: 70px !important; right: 12px !important; left: auto !important; }
+          .pv-nav-block { bottom: calc(52px + env(safe-area-inset-bottom, 0px)) !important; top: auto !important; right: 12px !important; left: auto !important; }
+          .pv-zoom-block { bottom: calc(52px + env(safe-area-inset-bottom, 0px)) !important; left: 12px !important; }
           .pv-search-block { right: 12px !important; left: auto !important; top: 12px !important; width: 200px !important; }
         }
       `}</style>
 
-      {/* 3D/2D View */}
-      {viewMode === 'GLOBE_3D' && <div ref={threeContainerRef} style={{ width: '100%', height: '100%', willChange: 'transform' }} />}
-      {viewMode === 'MAP_2D' && <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />}
-
-      {/* Location badge (2D only) */}
+      {/* 3D/2D View — слой карты ниже Leaflet-панелей; UI поверх (z-index ≥1000). */}
+      {viewMode === 'GLOBE_3D' && (
+        <div
+          ref={threeContainerRef}
+          style={{ width: '100%', height: '100%', willChange: 'transform', position: 'relative', zIndex: 0 }}
+        />
+      )}
       {viewMode === 'MAP_2D' && (
-        <div style={{
-          position: 'absolute', top: 62, left: '50%', transform: 'translateX(-50%)', zIndex: 30,
-          background: 'rgba(10,20,40,0.9)', border: '1px solid rgba(120,160,255,0.2)', borderRadius: 10,
-          padding: '4px 14px', fontSize: 12, color: 'var(--muted)', pointerEvents: 'auto', cursor: userLat !== null ? 'pointer' : 'default',
-          whiteSpace: 'nowrap',
-        }} onClick={handleGoToLocation}>
-          📍 {locationLabel}
+        <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
+          <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
       {/* Search */}
-      <div className="pv-search-block" style={{ position: 'absolute', top: 62, right: 340, zIndex: 30, width: 260 }}>
+      <div className="pv-search-block" style={{ position: 'absolute', top: 62, right: 340, zIndex: 1000, width: 260 }}>
         <input
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
@@ -727,15 +630,39 @@ export default function ProposalViewPage() {
         {searchLoading && <span style={{ position: 'absolute', right: 8, top: 7, fontSize: 10, color: 'var(--muted)' }}>...</span>}
       </div>
 
-      {/* Zoom controls */}
-      <div style={{ position: 'absolute', bottom: 20, left: 12, zIndex: 30, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {/* Zoom controls — горизонтально, выше оверлея Next.js (N) в dev */}
+      <div
+        className="pv-zoom-block"
+        style={{
+          position: 'absolute',
+          bottom: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+          left: 12,
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'row',
+          gap: 4,
+        }}
+      >
         <button onClick={() => handleZoom(1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(120,160,255,0.2)', background: 'rgba(10,20,40,0.9)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>+</button>
         <button onClick={() => handleZoom(-1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(120,160,255,0.2)', background: 'rgba(10,20,40,0.9)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>&minus;</button>
       </div>
 
-      {/* Navigation arrows (2D only) */}
+      {/* Navigation arrows (2D only) — справа снизу */}
       {viewMode === 'MAP_2D' && (
-        <div className="pv-nav-block" style={{ position: 'absolute', bottom: 20, left: 56, zIndex: 30, display: 'grid', gridTemplateColumns: 'repeat(3, 32px)', gridTemplateRows: 'repeat(3, 32px)', gap: 2 }}>
+        <div
+          className="pv-nav-block"
+          style={{
+            position: 'absolute',
+            bottom: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+            right: 12,
+            left: 'auto',
+            zIndex: 1000,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 32px)',
+            gridTemplateRows: 'repeat(3, 32px)',
+            gap: 2,
+          }}
+        >
           {(['up-left','up','up-right','left','','right','down-left','down','down-right'] as const).map((dir, i) => (
             dir === '' ? <div key={i} /> :
             <button key={dir} onClick={() => handleNavigate(dir)} style={{
@@ -754,7 +681,7 @@ export default function ProposalViewPage() {
       <div
         className="proposal-info-panel"
         style={{
-          position: 'absolute', right: 12, top: 64, zIndex: 20,
+          position: 'absolute', right: 12, top: 64, zIndex: 1000,
           width: 320, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
           background: 'rgba(10,20,40,0.92)', border: '1px solid rgba(120,160,255,0.2)',
           borderRadius: 14, padding: '18px 20px', backdropFilter: 'blur(8px)',
@@ -806,12 +733,77 @@ export default function ProposalViewPage() {
 
         {proposal.status === 'SUBMITTED' && publicKey && (!tally || tally.userVote === null) && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            <Button onClick={() => handleVote('FOR')} disabled={voting}>За</Button>
-            <Button onClick={() => handleVote('AGAINST')} disabled={voting}>Против</Button>
+            <Button onClick={() => handleVote('FOR')} disabled={voting || !sessionVerified}>
+              За
+            </Button>
+            <Button onClick={() => handleVote('AGAINST')} disabled={voting || !sessionVerified}>
+              Против
+            </Button>
           </div>
         )}
         {voteError && <p style={{ fontSize: 11, color: '#ff6b6b' }}>{voteError}</p>}
         {tally?.userVote && <p style={{ fontSize: 11, color: '#3ddc97' }}>Вы проголосовали: {tally.userVote === 'FOR' ? 'За' : 'Против'}</p>}
+
+        {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+            <Link
+              href={`/propose?open=${encodeURIComponent(proposal.id)}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '8px 10px',
+                borderRadius: 10,
+                border: '1px solid var(--border)',
+                background: 'rgba(255,255,255,0.06)',
+                color: 'var(--text)',
+                fontSize: 13,
+                textDecoration: 'none',
+              }}
+            >
+              Редактировать
+            </Link>
+            <Button type="button" onClick={async () => {
+              if (!proposal) return;
+              if (!sessionVerified) {
+                setDeleteErr('Нажмите «Авторизоваться» в шапке и подпишите запрос в кошельке.');
+                return;
+              }
+              if (!signMessage) {
+                setDeleteErr('Кошелёк не поддерживает подпись сообщений.');
+                return;
+              }
+              if (!window.confirm('Удалить предложение безвозвратно?')) return;
+              setDeleteBusy(true);
+              setDeleteErr(null);
+              try {
+                const message = `diploma-z96a propose:delete:${proposal.id}`;
+                const sigBytes = await signMessage(new TextEncoder().encode(message));
+                const res = await fetch(`/api/proposals/${proposal.id}`, {
+                  method: 'DELETE',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ authorPubkey: pubkey, signature: bs58.encode(sigBytes) }),
+                });
+                if (!res.ok) {
+                  const d = (await res.json().catch(() => ({}))) as { error?: string };
+                  throw new Error(d.error || `HTTP ${res.status}`);
+                }
+                router.push('/networks');
+              } catch (e: unknown) {
+                setDeleteErr(e instanceof Error ? e.message : 'Ошибка удаления');
+              } finally {
+                setDeleteBusy(false);
+              }
+            }} disabled={deleteBusy || !sessionVerified || !signMessage}>
+              {deleteBusy ? 'Удаление…' : 'Удалить сеть'}
+            </Button>
+          </div>
+        )}
+        {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && !sessionVerified && (
+          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+            Чтобы удалить предложение, сначала нажмите «Авторизоваться» в шапке сайта.
+          </p>
+        )}
+        {deleteErr && <p style={{ fontSize: 11, color: '#ff6b6b', marginTop: 6 }}>{deleteErr}</p>}
 
         {/* View toggle */}
         <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>

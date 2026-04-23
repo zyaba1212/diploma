@@ -57,12 +57,21 @@
 
 - URL по умолчанию: `cable/cable-geo.json` из того репозитория.
 - Переменная окружения **`SUBMARINE_CABLE_GEO_URL`** — подмена URL или локальный файл через **`--file path/to/cable-geo.json`**.
+- Для полей **`metadata.year`**, **`metadata.countries`**, опционально **`metadata.rfs`** и **`metadata.officialUrl`** (из поля `url` в `cable/<id>.json`, если это валидный `http(s)` URL) скрипт по умолчанию запрашивает у того же источника JSON **`cable/<id>.json`** по одному разу на каждый уникальный `id` кабеля (сотни HTTP-запросов при полном импорте; есть повтор при 429/503/502). База URL: **`SUBMARINE_CABLE_DETAIL_BASE_URL`** (по умолчанию каталог `.../main/cable/` в репозитории Steve Song). Отключить детали: флаг **`--no-details`** (только геометрия и базовые поля из GeoJSON).
+- В интерфейсе глобуса/2D блок «Источники» формируется для всех объектов (`cable` и `node`), если в данных есть валидные URL:
+  - **Сайт проекта / оператора** — из `metadata.officialUrl` (или родственных полей metadata, если присутствуют),
+  - **Источник провайдера** — из `NetworkProvider.sourceUrl` (если указан),
+  - **Ссылка на датасет/запись** — по типу/метаданным (например, `cable/<id>.json` в GitHub для OUCM, permalink в OpenStreetMap, страница датасета data.gov.au, Celestrak),
+  - **Поиск в Wikipedia (EN)** — для подводных кабелей как справочный поиск (не подтверждение трассы).
 - Идемпотентность: `sourceId` вида `oucm-<feature_id>` (при нескольких сегментах — суффикс `-s1`, `-s2`, …).
 - Провайдер в БД: `id = open-undersea-cable-map`, тип линии: `CABLE_FIBER`.
 
 ```bash
 # проверка без записи в БД
 node scripts/sync-submarine-cables.mjs --dry-run --limit 5
+
+# импорт без запросов cable/<id>.json (без года/стран в metadata)
+node scripts/sync-submarine-cables.mjs --no-details
 
 # полный импорт (нужен DATABASE_URL)
 npm run scripts:sync-cables

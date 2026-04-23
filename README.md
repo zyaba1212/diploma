@@ -47,6 +47,7 @@ npm run test:proposals
 
 ## Документация
 
+- **`docs/project-overview.md` — полный онбординг проекта (для новых агентов/разработчиков, читать первым)**
 - `docs/requirements.md` — требования
 - `docs/architecture.md` — архитектура и потоки
 - `docs/earth-visualization.md` — 3D глобус: текстуры Земли, офлайн-режим
@@ -90,6 +91,8 @@ npm run test:proposals-stage8
 Опционально (доп. smoke):
 ```bash
 npm run test:auth-profile-smoke
+# админ-панель: `STAFF_SESSION_SECRET`, `ADMIN_WALLET_PUBKEY`; smoke: ещё `ADMIN_SMOKE_WALLET_SECRET` (см. .env.example)
+npm run test:admin-smoke
 npm run test:ux-globe-smoke
 # geocode внешних источников при отсутствии интернета можно пропустить:
 # SKIP_GEOCODE_SMOKE=1 npm run test:ux-globe-smoke

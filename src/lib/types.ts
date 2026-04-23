@@ -1,3 +1,5 @@
+// types.ts — прикладная библиотека/утилиты.
+
 export type Scope = 'GLOBAL' | 'LOCAL';
 
 export type NetworkElementType =
@@ -11,6 +13,7 @@ export type NetworkElementType =
   | 'MULTIPLEXER'
   | 'DEMULTIPLEXER'
   | 'REGENERATOR'
+  | 'REGENERATION_POINT'
   | 'MODEM'
 
   // Underground / terrestrial cables
@@ -19,6 +22,7 @@ export type NetworkElementType =
 
   | 'BASE_STATION'
   | 'SATELLITE'
+  | 'SATELLITE_RASSVET'
   | 'EQUIPMENT'
   | 'MESH_RELAY'
   | 'SMS_GATEWAY'
@@ -41,6 +45,7 @@ export type NetworkElementDTO = {
   providerId?: string | null;
   name?: string | null;
   sourceId?: string | null;
+  sourceUrl?: string | null;
   lat?: number | null;
   lng?: number | null;
   altitude?: number | null;

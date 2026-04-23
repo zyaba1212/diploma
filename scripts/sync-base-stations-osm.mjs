@@ -216,8 +216,8 @@ async function main() {
 
   await prisma.networkProvider.upsert({
     where: { id: providerId },
-    update: { name: PROVIDER_NAME, sourceUrl: `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE})`, scope },
-    create: { id: providerId, name: PROVIDER_NAME, scope, sourceUrl: `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE})` },
+    update: { name: PROVIDER_NAME, sourceUrl: PROVIDER_SOURCE_URL, scope },
+    create: { id: providerId, name: PROVIDER_NAME, scope, sourceUrl: PROVIDER_SOURCE_URL },
   });
 
   const BATCH = 25;

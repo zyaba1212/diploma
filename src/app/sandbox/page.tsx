@@ -7,21 +7,28 @@ import * as THREE from 'three';
 import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { EQUIPMENT_FACTORIES, NODE_VISUALS, CABLE_COLORS, createSatelliteObject } from '@/lib/three/factories';
 import { latLngToVec3, orientGlobeGroupCenterFromLatLng, computeGlobeCenterLatLng, makeTextMesh, disposeThreeObject } from '@/lib/three/utils';
+import { attachGlobeTrackballControls } from '@/lib/three/globeTrackballControls';
 import { WORLD_LABELS } from '@/lib/three/labels';
 import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality';
 import { disposeEarthTextures, loadEarthTextures } from '@/lib/loadEarthTextures';
 import { Button } from '@/components/ui/Button';
+import { Panel } from '@/components/ui/Panel';
 
-import type { NetworkResponseDTO } from '@/lib/types';
 import type L from 'leaflet';
 
 type ElementType =
   | 'SERVER' | 'SWITCH' | 'MULTIPLEXER' | 'DEMULTIPLEXER' | 'BASE_STATION'
-  | 'REGENERATOR' | 'PROVIDER' | 'SATELLITE' | 'MESH_RELAY' | 'SMS_GATEWAY'
-  | 'VSAT_TERMINAL' | 'OFFLINE_QUEUE'
+  | 'REGENERATOR' | 'PROVIDER' | 'SATELLITE' | 'SATELLITE_RASSVET' | 'MESH_RELAY' | 'SMS_GATEWAY'
+  | 'VSAT_TERMINAL'
   | 'CABLE_UNDERGROUND_FIBER' | 'CABLE_UNDERGROUND_COPPER' | 'CABLE_FIBER' | 'CABLE_COPPER';
+
+const MAP_ZOOM_MIN = 2;
+const MAP_ZOOM_MAX = 18;
+const GLOBE_Z_MIN = 1.2;
+const GLOBE_Z_MAX = 6;
 
 type SandboxElement = {
   tempId: string;
@@ -56,7 +63,6 @@ const ELEMENT_TYPES: { category: string; types: { type: ElementType; label: stri
       { type: 'MESH_RELAY', label: 'Mesh-ретранслятор', color: '#00e5ff' },
       { type: 'SMS_GATEWAY', label: 'SMS-шлюз (2G)', color: '#ffd740' },
       { type: 'VSAT_TERMINAL', label: 'VSAT-терминал', color: '#b388ff' },
-      { type: 'OFFLINE_QUEUE', label: 'Офлайн-очередь', color: '#69f0ae' },
     ],
   },
   {
@@ -84,14 +90,13 @@ function nodeColor(type: string): string {
 
 export default function SandboxPage() {
   const authorPubkey = useAuthorPubkey();
+  const sessionVerified = useSessionVerified();
   const { connected, signMessage } = useWallet();
 
   const [elements, setElements] = useState<SandboxElement[]>([]);
   const [selectedType, setSelectedType] = useState<ElementType | null>(null);
   const [cableFromId, setCableFromId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('MAP_2D');
-  const [showGlobalNetwork, setShowGlobalNetwork] = useState(false);
-  const [network, setNetwork] = useState<NetworkResponseDTO | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
@@ -102,6 +107,8 @@ export default function SandboxPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [mapZoom, setMapZoom] = useState(6);
+  const [globeZ, setGlobeZ] = useState(3);
+  const [mapReady, setMapReady] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   useEffect(() => {
@@ -134,14 +141,6 @@ export default function SandboxPage() {
   const sandboxGroupRef = useRef<THREE.Group | null>(null);
   const threeInitRef = useRef(false);
   const animFrameRef = useRef(0);
-
-  useEffect(() => {
-    if (!showGlobalNetwork) { setNetwork(null); return; }
-    fetch('/api/network?scope=GLOBAL')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setNetwork(data as NetworkResponseDTO); })
-      .catch(() => {});
-  }, [showGlobalNetwork]);
 
   // --- SEARCH ---
   useEffect(() => {
@@ -186,10 +185,11 @@ export default function SandboxPage() {
         center: [c.lat, c.lng],
         zoom: 6,
         zoomControl: false,
+        attributionControl: false,
       });
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OSM',
+        attribution: '',
         maxZoom: 18,
       }).addTo(map);
 
@@ -270,10 +270,12 @@ export default function SandboxPage() {
       });
 
       mapInstanceRef.current = map;
+      setMapReady(true);
     })();
 
     return () => {
       cancelled = true;
+      setMapReady(false);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -331,6 +333,7 @@ export default function SandboxPage() {
     const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 2000);
     camera.position.set(0, 0, 3);
     cameraRef.current = camera;
+    setGlobeZ(3);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -425,29 +428,15 @@ export default function SandboxPage() {
       }
     });
 
-    // Mouse drag rotation
-    let dragging = false;
-    let prevX = 0, prevY = 0;
-    const onPointerDown = (e: PointerEvent) => {
-      dragging = true; prevX = e.clientX; prevY = e.clientY;
-    };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!dragging) return;
-      const dx = e.clientX - prevX;
-      const dy = e.clientY - prevY;
-      prevX = e.clientX; prevY = e.clientY;
-      const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.005);
-      const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.005);
-      globeGroup.quaternion.premultiply(qx).premultiply(qy);
-    };
-    const onPointerUp = () => { dragging = false; };
-
-    let zoomLevel = 3;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      zoomLevel = Math.max(1.2, Math.min(6, zoomLevel + (e.deltaY > 0 ? 0.15 : -0.15)));
-      camera.position.z = zoomLevel;
-    };
+    const trackball = attachGlobeTrackballControls({
+      domElement: renderer.domElement,
+      globeGroup,
+      globeMesh: globeGroup.children[0] as THREE.Mesh,
+      camera,
+      zoomMin: GLOBE_Z_MIN,
+      zoomMax: GLOBE_Z_MAX,
+      onZoomApplied: (z) => setGlobeZ(z),
+    });
 
     const raycaster = new THREE.Raycaster();
     const onClick = (e: MouseEvent) => {
@@ -507,11 +496,11 @@ export default function SandboxPage() {
       setElements((prev) => [...prev, el]);
     };
 
-    mount.addEventListener('pointerdown', onPointerDown);
-    mount.addEventListener('pointermove', onPointerMove);
-    mount.addEventListener('pointerup', onPointerUp);
-    mount.addEventListener('wheel', onWheel, { passive: false });
-    mount.addEventListener('click', onClick);
+    const onClickWrapped = (e: MouseEvent) => {
+      if (trackball.consumeGlobeDragClickSuppression()) return;
+      onClick(e);
+    };
+    mount.addEventListener('click', onClickWrapped);
 
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
@@ -537,11 +526,8 @@ export default function SandboxPage() {
 
     return () => {
       cancelAnimationFrame(animFrameRef.current);
-      mount.removeEventListener('pointerdown', onPointerDown);
-      mount.removeEventListener('pointermove', onPointerMove);
-      mount.removeEventListener('pointerup', onPointerUp);
-      mount.removeEventListener('wheel', onWheel);
-      mount.removeEventListener('click', onClick);
+      trackball.detach();
+      mount.removeEventListener('click', onClickWrapped);
       window.removeEventListener('resize', onResize);
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
@@ -584,13 +570,14 @@ export default function SandboxPage() {
 
       const visual = NODE_VISUALS[el.type];
       if (!visual) continue;
-      const nodeR = el.type === 'SATELLITE' ? 1.0 + 550 / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
+      const nodeR =
+        el.type === 'SATELLITE' || el.type === 'SATELLITE_RASSVET' ? 1.0 + 550 / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
       const pos = latLngToVec3(el.lat, el.lng, nodeR);
       if (!pos) continue;
       const normal = pos.clone().normalize();
 
       let marker: THREE.Object3D;
-      if (el.type === 'SATELLITE') {
+      if (el.type === 'SATELLITE' || el.type === 'SATELLITE_RASSVET') {
         marker = createSatelliteObject(visual.size, visual.color, visual.emissive);
       } else {
         const factory = EQUIPMENT_FACTORIES[el.type];
@@ -604,33 +591,7 @@ export default function SandboxPage() {
       group.add(marker);
     }
 
-    if (showGlobalNetwork && network) {
-      for (const el of network.elements) {
-        if (el.path && (el.type === 'CABLE_FIBER' || el.type === 'CABLE_COPPER' || el.type === 'CABLE_UNDERGROUND_FIBER' || el.type === 'CABLE_UNDERGROUND_COPPER')) {
-          const pts = el.path.map(p => latLngToVec3(p.lat, p.lng, 1.002)).filter(Boolean) as THREE.Vector3[];
-          if (pts.length < 2) continue;
-          const colorHex = el.type === 'CABLE_FIBER' ? 0x3a7bd5 : el.type === 'CABLE_COPPER' ? 0xd4a54a : el.type === 'CABLE_UNDERGROUND_FIBER' ? 0x00e676 : 0xff7043;
-          const geo = new THREE.BufferGeometry().setFromPoints(pts);
-          const mat = new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.25 });
-          const line = new THREE.Line(geo, mat);
-          line.frustumCulled = false;
-          group.add(line);
-        } else if (typeof el.lat === 'number' && typeof el.lng === 'number') {
-          const visual = NODE_VISUALS[el.type];
-          if (!visual) continue;
-          const nodeR = el.type === 'SATELLITE' ? 1.0 + 550 / 6371 : 1.012;
-          const pos = latLngToVec3(el.lat, el.lng, nodeR);
-          if (!pos) continue;
-          const normal = pos.clone().normalize();
-          const factory = EQUIPMENT_FACTORIES[el.type];
-          const marker = factory ? factory(visual.size * 0.7, 0x666688, 0x222233) : createSatelliteObject(visual.size * 0.7, 0x666688, 0x222233);
-          marker.position.copy(pos);
-          marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-          group.add(marker);
-        }
-      }
-    }
-  }, [elements, viewMode, showGlobalNetwork, network]);
+  }, [elements, viewMode]);
 
   // --- REMOVE ELEMENT ---
   const removeElement = useCallback((tid: string) => {
@@ -661,6 +622,14 @@ export default function SandboxPage() {
   // --- SAVE ---
   const handleSave = useCallback(async () => {
     if (!authorPubkey || elements.length === 0) return;
+    if (!connected || !signMessage) {
+      setSaveError('Подключите кошелёк с поддержкой подписи сообщений.');
+      return;
+    }
+    if (!sessionVerified) {
+      setSaveError('Нажмите «Авторизоваться» в шапке сайта.');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     setSaveSuccess(null);
@@ -679,12 +648,7 @@ export default function SandboxPage() {
       if (!pRes.ok) throw new Error(`Failed to create proposal: ${pRes.status}`);
       const proposal = await pRes.json();
 
-      if (!signMessage) {
-        setSaveError('Кошелёк не поддерживает подпись сообщений');
-        setSaving(false);
-        return;
-      }
-      const message = `proposal:${proposal.id}\nauthor:${authorPubkey}\nts:${new Date().toISOString()}`;
+      const message = `diploma-z96a action:add:${proposal.id}`;
       const encoded = new TextEncoder().encode(message);
       const sig = await signMessage(encoded);
       const sigBase58 = bs58.encode(sig);
@@ -700,19 +664,27 @@ export default function SandboxPage() {
             payload.path = [{ lat: fromEl.lat, lng: fromEl.lng }, { lat: toEl.lat, lng: toEl.lng }];
           }
         }
-        await fetch(`/api/proposals/${proposal.id}/actions`, {
+        const actionRes = await fetch(`/api/proposals/${proposal.id}/actions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ actionType: 'CREATE', elementPayload: payload, authorPubkey, signature: sigBase58 }),
         });
+        if (!actionRes.ok) {
+          const err = await actionRes.json().catch(() => ({}));
+          throw new Error(`Failed to add action: ${(err as Record<string, string>).error || actionRes.status}`);
+        }
       }
 
       // Auto-submit to make it appear in Proposals page
-      await fetch(`/api/proposals/${proposal.id}/submit-draft`, {
+      const submitRes = await fetch(`/api/proposals/${proposal.id}/submit-draft`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ authorPubkey }),
       });
+      if (!submitRes.ok) {
+        const err = await submitRes.json().catch(() => ({}));
+        throw new Error(`Failed to submit proposal: ${(err as Record<string, string>).error || submitRes.status}`);
+      }
 
       setSaveSuccess(`Предложение отправлено на голосование! Перейдите в "Предложения" для просмотра.`);
       setShowSaveModal(false);
@@ -721,14 +693,17 @@ export default function SandboxPage() {
     } finally {
       setSaving(false);
     }
-  }, [authorPubkey, elements, proposalTitle, proposalDesc, signMessage]);
+  }, [authorPubkey, connected, elements, proposalTitle, proposalDesc, signMessage, sessionVerified]);
 
   const handleZoom = useCallback((delta: number) => {
     if (viewMode === 'MAP_2D' && mapInstanceRef.current) {
-      mapInstanceRef.current.setZoom(mapInstanceRef.current.getZoom() + delta);
+      const m = mapInstanceRef.current;
+      const next = Math.min(MAP_ZOOM_MAX, Math.max(MAP_ZOOM_MIN, m.getZoom() + delta));
+      m.setZoom(next);
     } else if (viewMode === 'GLOBE_3D' && cameraRef.current) {
-      const z = Math.max(1.2, Math.min(6, cameraRef.current.position.z - delta * 0.5));
+      const z = Math.max(GLOBE_Z_MIN, Math.min(GLOBE_Z_MAX, cameraRef.current.position.z - delta * 0.5));
       cameraRef.current.position.z = z;
+      setGlobeZ(z);
     }
   }, [viewMode]);
 
@@ -886,29 +861,6 @@ export default function SandboxPage() {
           </div>
         )}
 
-        {/* Toggle */}
-        <div style={{ marginTop: 8, display: 'flex', gap: 4 }}>
-          <Button onClick={() => {
-            if (globeGroupRef.current) {
-              const ctr = computeGlobeCenterLatLng(globeGroupRef.current);
-              if (ctr) savedCenterRef.current = ctr;
-            }
-            setViewMode('MAP_2D');
-          }} disabled={viewMode === 'MAP_2D'}>2D</Button>
-          <Button onClick={() => {
-            if (mapInstanceRef.current) {
-              const ctr = mapInstanceRef.current.getCenter();
-              savedCenterRef.current = { lat: ctr.lat, lng: ctr.lng };
-            }
-            setViewMode('GLOBE_3D');
-          }} disabled={viewMode === 'GLOBE_3D'}>3D</Button>
-        </div>
-
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text)', cursor: 'pointer', marginTop: 10 }}>
-          <input type="checkbox" checked={showGlobalNetwork} onChange={(e) => setShowGlobalNetwork(e.target.checked)} />
-          Показать глобальную сеть
-        </label>
-
         {/* My Elements */}
         <div style={{ marginTop: 14, borderTop: '1px solid rgba(232,236,255,0.10)', paddingTop: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>
@@ -975,11 +927,119 @@ export default function SandboxPage() {
         {viewMode === 'MAP_2D' && <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />}
         {viewMode === 'GLOBE_3D' && <div ref={threeContainerRef} style={{ width: '100%', height: '100%' }} />}
 
-        {/* Custom zoom */}
-        <div style={{ position: 'absolute', bottom: 20, left: 12, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <button onClick={() => handleZoom(1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(232,236,255,0.15)', background: 'rgba(10,20,40,0.85)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>+</button>
-          <button onClick={() => handleZoom(-1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(232,236,255,0.15)', background: 'rgba(10,20,40,0.85)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>&minus;</button>
+        <div style={{ position: 'absolute', left: 12, bottom: 12, display: 'flex', gap: 12, zIndex: 1000, pointerEvents: 'auto' }}>
+          <Panel title="Режим">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button
+                type="button"
+                onClick={() => {
+                  if (mapInstanceRef.current) {
+                    const ctr = mapInstanceRef.current.getCenter();
+                    savedCenterRef.current = { lat: ctr.lat, lng: ctr.lng };
+                  }
+                  setViewMode('GLOBE_3D');
+                }}
+                disabled={viewMode === 'GLOBE_3D'}
+              >
+                3D
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  if (globeGroupRef.current) {
+                    const ctr = computeGlobeCenterLatLng(globeGroupRef.current);
+                    if (ctr) savedCenterRef.current = ctr;
+                  }
+                  setViewMode('MAP_2D');
+                }}
+                disabled={viewMode === 'MAP_2D'}
+              >
+                2D
+              </Button>
+              <Button
+                type="button"
+                onClick={() => handleZoom(1)}
+                disabled={
+                  viewMode === 'MAP_2D'
+                    ? !mapInstanceRef.current || mapZoom >= MAP_ZOOM_MAX - 1e-6
+                    : !cameraRef.current || globeZ <= GLOBE_Z_MIN + 1e-6
+                }
+                title="Ближе"
+              >
+                +
+              </Button>
+              <Button
+                type="button"
+                onClick={() => handleZoom(-1)}
+                disabled={
+                  viewMode === 'MAP_2D'
+                    ? !mapInstanceRef.current || mapZoom <= MAP_ZOOM_MIN + 1e-6
+                    : !cameraRef.current || globeZ >= GLOBE_Z_MAX - 1e-6
+                }
+                title="Дальше"
+              >
+                −
+              </Button>
+              <span style={{ marginLeft: 4, fontSize: 12, color: 'var(--muted)' }}>
+                {viewMode === 'MAP_2D' ? mapZoom.toFixed(0) : globeZ.toFixed(2)}
+              </span>
+            </div>
+          </Panel>
         </div>
+
+        {viewMode === 'MAP_2D' && mapReady && (
+          <div
+            style={{
+              position: 'absolute',
+              right: 12,
+              bottom: 12,
+              zIndex: 1000,
+              pointerEvents: 'auto',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 36px)',
+              gridTemplateRows: 'repeat(3, 36px)',
+              gap: 2,
+            }}
+          >
+            {[
+              { label: '\u2196', dx: -100, dy: -100 },
+              { label: '\u2191', dx: 0, dy: -100 },
+              { label: '\u2197', dx: 100, dy: -100 },
+              { label: '\u2190', dx: -100, dy: 0 },
+              { label: '', dx: 0, dy: 0 },
+              { label: '\u2192', dx: 100, dy: 0 },
+              { label: '\u2199', dx: -100, dy: 100 },
+              { label: '\u2193', dx: 0, dy: 100 },
+              { label: '\u2198', dx: 100, dy: 100 },
+            ].map((dir, i) =>
+              dir.label ? (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => mapInstanceRef.current?.panBy([dir.dx, dir.dy])}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 8,
+                    border: '1px solid var(--border)',
+                    background: 'rgba(0,0,0,0.45)',
+                    color: 'var(--text)',
+                    fontSize: 16,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backdropFilter: 'blur(6px)',
+                  }}
+                >
+                  {dir.label}
+                </button>
+              ) : (
+                <div key={i} />
+              ),
+            )}
+          </div>
+        )}
 
         {selectedType && (
           <div style={{ position: 'absolute', top: 62, left: '50%', transform: 'translateX(-50%)', background: 'rgba(10,20,40,0.9)', borderRadius: 8, padding: '6px 14px', fontSize: 12, color: '#ffcc00', zIndex: 1000, pointerEvents: 'none' }}>
@@ -988,36 +1048,6 @@ export default function SandboxPage() {
           </div>
         )}
 
-        {viewMode === 'MAP_2D' && mapInstanceRef.current && (
-          <div style={{ position: 'absolute', bottom: 70, left: 12, zIndex: 1000, display: 'grid', gridTemplateColumns: 'repeat(3, 28px)', gap: 2 }}>
-            {[
-              { label: '↖', dx: -100, dy: -100 },
-              { label: '↑', dx: 0, dy: -100 },
-              { label: '↗', dx: 100, dy: -100 },
-              { label: '←', dx: -100, dy: 0 },
-              { label: '·', dx: 0, dy: 0 },
-              { label: '→', dx: 100, dy: 0 },
-              { label: '↙', dx: -100, dy: 100 },
-              { label: '↓', dx: 0, dy: 100 },
-              { label: '↘', dx: 100, dy: 100 },
-            ].map((d) => (
-              <button
-                key={d.label}
-                onClick={() => { if (d.dx || d.dy) mapInstanceRef.current?.panBy([d.dx, d.dy]); }}
-                disabled={!d.dx && !d.dy}
-                style={{
-                  width: 28, height: 28, borderRadius: 6,
-                  border: '1px solid rgba(232,236,255,0.15)',
-                  background: (!d.dx && !d.dy) ? 'transparent' : 'rgba(10,20,40,0.85)',
-                  color: '#fff', fontSize: 12, cursor: (d.dx || d.dy) ? 'pointer' : 'default',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Save modal */}
@@ -1038,7 +1068,9 @@ export default function SandboxPage() {
               />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <Button onClick={handleSave} disabled={saving}>{saving ? 'Сохранение...' : `Сохранить (${elements.length} эл.)`}</Button>
+              <Button onClick={handleSave} disabled={saving || !sessionVerified}>
+                {saving ? 'Сохранение...' : `Сохранить (${elements.length} эл.)`}
+              </Button>
               <Button onClick={() => setShowSaveModal(false)}>Отмена</Button>
             </div>
           </div>

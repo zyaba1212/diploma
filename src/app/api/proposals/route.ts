@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import type { ProposalStatus, Scope } from '@prisma/client';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type CreateProposalBody = {
   scope?: Scope | string;
@@ -67,6 +68,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'authorPubkey is required' }, { status: 400 });
   }
 
+  if (await isUserBanned(authorPubkey)) {
+    return userBannedResponsePlain();
+  }
+
   try {
     const proposal = await prisma.proposal.create({
       data: {
@@ -85,6 +90,11 @@ export async function POST(req: Request) {
   }
 }
 
+/**
+ * Список предложений: без `status` возвращает все подходящие по остальным фильтрам.
+ * Публичная витрина `/networks` запрашивает только `status=SUBMITTED,ACCEPTED,APPLIED`;
+ * админка и кабинет используют другие фильтры (в т.ч. все статусы или `authorPubkey`).
+ */
 export async function GET(req: Request) {
   const url = new URL(req.url);
 
@@ -132,7 +142,7 @@ export async function GET(req: Request) {
   try {
     const proposals = await prisma.proposal.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
       skip: offset,
       take: limit,
       select: {
@@ -140,6 +150,7 @@ export async function GET(req: Request) {
         scope: true,
         authorPubkey: true,
         status: true,
+        pinned: true,
         title: true,
         description: true,
         createdAt: true,

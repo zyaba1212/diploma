@@ -4,9 +4,10 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import bs58 from 'bs58';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
+import { resetAuthSessionClient, signAndVerifyAuthSession } from '@/lib/auth-session';
 
 const NAV_LINK_STYLE: React.CSSProperties = {
   pointerEvents: 'auto',
@@ -35,6 +36,7 @@ function truncatePubkey(pk: string): string {
 type ProfileJson = {
   username: string | null;
   inDatabase?: boolean;
+  isBanned?: boolean;
 };
 
 const btnBase: React.CSSProperties = {
@@ -54,6 +56,7 @@ export function SiteHeader() {
   const wallet = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const pubkey = useAuthorPubkey();
+  const sessionVerified = useSessionVerified();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -65,15 +68,23 @@ export function SiteHeader() {
   const walletWrapRef = useRef<HTMLDivElement>(null);
   const mobileMenuWrapRef = useRef<HTMLDivElement>(null);
 
-  const authorized = profile?.inDatabase === true;
+  const banned = profile?.isBanned === true;
+  const authorized = profile?.inDatabase === true && sessionVerified && !banned;
 
   const loadProfile = useCallback(async () => {
     if (!pubkey) { setProfile(null); return; }
     setProfileLoading(true);
     try {
-      const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`);
-      if (res.ok) setProfile((await res.json()) as ProfileJson);
-      else setProfile(null);
+      const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = (await res.json()) as ProfileJson;
+        if (data.isBanned) {
+          resetAuthSessionClient();
+        }
+        setProfile(data);
+      } else {
+        setProfile(null);
+      }
     } catch { setProfile(null); }
     finally { setProfileLoading(false); }
   }, [pubkey]);
@@ -123,19 +134,13 @@ export function SiteHeader() {
     if (!wallet.connected || !wallet.signMessage || !pubkey) return;
     setAuthBusy(true);
     try {
-      const message = `diploma-z96a auth\npubkey=${pubkey}\nts=${new Date().toISOString()}`;
-      const encoded = new TextEncoder().encode(message);
-      const signature = await wallet.signMessage(encoded);
-      const res = await fetch('/api/auth/verify', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ publicKey: pubkey, message, signature: bs58.encode(signature) }),
-      });
-      const json = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      await loadProfile();
-      window.dispatchEvent(new CustomEvent('auth:verified', { detail: { pubkey } }));
-      setDropdownOpen(false);
+      const result = await signAndVerifyAuthSession(pubkey, wallet.signMessage);
+      if (result === 'ok') {
+        await loadProfile();
+        setDropdownOpen(false);
+      } else if (result === 'banned') {
+        setDropdownOpen(false);
+      }
     } catch { /* wallet popup cancelled or network error */ }
     finally { setAuthBusy(false); }
   }, [pubkey, wallet, loadProfile]);
@@ -144,6 +149,7 @@ export function SiteHeader() {
     if (!wallet.connected || !wallet.disconnect) return;
     setConnBusy(true);
     try {
+      resetAuthSessionClient();
       await wallet.disconnect();
       setProfile(null);
       setDropdownOpen(false);
@@ -151,9 +157,12 @@ export function SiteHeader() {
     finally { setConnBusy(false); }
   }, [wallet]);
 
-  const displayLabel = authorized && profile?.username
-    ? profile.username
-    : pubkey ? truncatePubkey(pubkey) : '';
+  const displayLabel =
+    sessionVerified && profile?.inDatabase && profile?.username
+      ? profile.username
+      : pubkey
+        ? truncatePubkey(pubkey)
+        : '';
 
   const mobileNavLinkStyle: React.CSSProperties = {
     ...NAV_LINK_STYLE,
@@ -162,6 +171,8 @@ export function SiteHeader() {
     padding: '12px 16px',
     borderRadius: 0,
   };
+
+  if (pathname.startsWith('/admin')) return null;
 
   return (
     <header
@@ -262,18 +273,18 @@ export function SiteHeader() {
                 zIndex: 1001,
               }}
             >
-              {LINKS.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setMobileNavOpen(false)}
-                  style={{
-                    ...mobileNavLinkStyle,
-                    ...(pathname === link.href ? { background: 'rgba(120,160,255,0.15)', color: '#8ab4f8' } : {}),
-                  }}
-                >
-                  {link.label}
-                </Link>
+          {LINKS.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={() => setMobileNavOpen(false)}
+              style={{
+                ...mobileNavLinkStyle,
+                ...(pathname === link.href ? { background: 'rgba(120,160,255,0.15)', color: '#8ab4f8' } : {}),
+              }}
+            >
+              {link.label}
+            </Link>
               ))}
             </div>
           )}
@@ -333,7 +344,7 @@ export function SiteHeader() {
                     onClick={() => void authorize()}
                     disabled={authBusy || !wallet.signMessage}
                   >
-                    Авторизовать
+                    Авторизоваться
                   </button>
                 )}
                 <button
