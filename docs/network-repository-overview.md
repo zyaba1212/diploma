@@ -96,7 +96,7 @@
 
 **Подземные кабели:** `CABLE_UNDERGROUND_COPPER`, `CABLE_UNDERGROUND_FIBER`
 
-**Узлы / оборудование (телеком-логика):** `PROVIDER`, `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`, `BASE_STATION`, `SATELLITE`, `EQUIPMENT` — обобщённое оборудование
+**Узлы / оборудование (телеком-логика):** `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`, `BASE_STATION`, `SATELLITE`, `EQUIPMENT` — обобщённое оборудование
 
 **Офлайн / mesh / транзакции без постоянного онлайна:** `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE`
 

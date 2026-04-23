@@ -22,6 +22,7 @@ import {
   type GlobeLabelCandidate,
 } from '@/lib/three/globeAppearance';
 import { Button } from '@/components/ui/Button';
+import { colors } from '@/theme/colors';
 import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { foldProposalActionsForDisplay } from '@/lib/stage7/proposalActionFold';
 import type L from 'leaflet';
@@ -59,7 +60,7 @@ function isCableType(t: string) {
 export default function ProposalViewPage() {
   const params = useParams();
   const router = useRouter();
-  const id = typeof params.id === 'string' ? params.id : '';
+  const id = typeof params?.id === 'string' ? params.id : '';
   const { publicKey, signMessage } = useWallet();
   const pubkey = publicKey?.toBase58() ?? '';
   const sessionVerified = useSessionVerified();
@@ -74,6 +75,7 @@ export default function ProposalViewPage() {
   const [authorName, setAuthorName] = useState<string>('');
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -372,7 +374,8 @@ export default function ProposalViewPage() {
 
     // Tooltip
     const tooltipDiv = document.createElement('div');
-    tooltipDiv.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;display:none;background:rgba(10,20,45,0.95);border:1px solid rgba(120,160,255,0.3);border-radius:8px;padding:6px 12px;font-size:12px;color:#eaf2ff;max-width:240px;backdrop-filter:blur(6px)';
+    tooltipDiv.style.cssText =
+      'position:fixed;z-index:9999;pointer-events:none;display:none;background:rgba(10,20,45,0.95);border:1px solid rgba(120,160,255,0.3);border-radius:8px;padding:6px 12px;font-size:12px;color:#eaf2ff;max-width:240px;backdrop-filter:blur(6px)';
     document.body.appendChild(tooltipDiv);
     const raycaster = new THREE.Raycaster();
     raycaster.params.Line = { threshold: 0.012 };
@@ -683,127 +686,145 @@ export default function ProposalViewPage() {
         style={{
           position: 'absolute', right: 12, top: 64, zIndex: 1000,
           width: 320, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
-          background: 'rgba(10,20,40,0.92)', border: '1px solid rgba(120,160,255,0.2)',
-          borderRadius: 14, padding: '18px 20px', backdropFilter: 'blur(8px)',
+          background: colors.bg.card, border: `1px solid ${colors.border}`,
+          borderRadius: 4, padding: '16px 16px',
           pointerEvents: 'auto',
         }}
       >
         <div className="proposal-sheet-handle" aria-hidden />
-        <Link href="/networks" style={{ fontSize: 12, color: '#8ab4f8', textDecoration: 'none', marginBottom: 8, display: 'inline-block' }}>
-          &larr; Все предложения
-        </Link>
+        <button
+          type="button"
+          onClick={() => setIsDetailsOpen(prev => !prev)}
+          aria-expanded={isDetailsOpen}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            marginBottom: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid rgba(120,160,255,0.16)',
+            background: 'rgba(255,255,255,0.04)',
+            cursor: 'pointer',
+          }}
+        >
+          <span>{isDetailsOpen ? 'Скрыть детали предложения' : 'Показать детали предложения'}</span>
+          <span aria-hidden>{isDetailsOpen ? '▾' : '▸'}</span>
+        </button>
 
-        <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', margin: '8px 0 4px' }}>
-          {proposal.title || 'Без названия'}
-        </h2>
+        {isDetailsOpen && (
+          <>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', margin: '8px 0 4px' }}>
+              {proposal.title || 'Без названия'}
+            </h2>
 
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-          {authorName || proposal.authorPubkey.slice(0, 8) + '...'}
-          {' · '}
-          {new Date(proposal.createdAt).toLocaleDateString('ru-RU')}
-          {' · '}
-          <span style={{ color: statusColor }}>{proposal.status}</span>
-        </div>
-
-        {proposal.description && (
-          <p style={{ fontSize: 13, color: 'rgba(200,220,255,0.8)', lineHeight: 1.5, marginBottom: 10 }}>
-            {proposal.description}
-          </p>
-        )}
-
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-          Узлов: {nodeCount} · Кабелей: {cableCount}
-        </div>
-
-        {/* Vote bar */}
-        {tally && (
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 4 }}>
-              <span style={{ color: '#3ddc97' }}>За: {tally.for}</span>
-              <span style={{ color: '#ff6b6b' }}>Против: {tally.against}</span>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+              {authorName || proposal.authorPubkey.slice(0, 8) + '...'}
+              {' · '}
+              {new Date(proposal.createdAt).toLocaleDateString('ru-RU')}
+              {' · '}
+              <span style={{ color: statusColor }}>{proposal.status}</span>
             </div>
-            <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-              {tally.total > 0 && (
-                <div style={{ height: '100%', width: `${(tally.for / tally.total) * 100}%`, background: '#3ddc97', borderRadius: 2 }} />
-              )}
+
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+              Узлов: {nodeCount} · Кабелей: {cableCount}
             </div>
-            {timeRemaining && <div style={{ fontSize: 11, color: '#f6c177', marginTop: 4 }}>{timeRemaining}</div>}
-          </div>
-        )}
 
-        {proposal.status === 'SUBMITTED' && publicKey && (!tally || tally.userVote === null) && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            <Button onClick={() => handleVote('FOR')} disabled={voting || !sessionVerified}>
-              За
-            </Button>
-            <Button onClick={() => handleVote('AGAINST')} disabled={voting || !sessionVerified}>
-              Против
-            </Button>
-          </div>
-        )}
-        {voteError && <p style={{ fontSize: 11, color: '#ff6b6b' }}>{voteError}</p>}
-        {tally?.userVote && <p style={{ fontSize: 11, color: '#3ddc97' }}>Вы проголосовали: {tally.userVote === 'FOR' ? 'За' : 'Против'}</p>}
+            {/* Vote bar */}
+            {tally && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: '#3ddc97' }}>За: {tally.for}</span>
+                  <span style={{ color: '#ff6b6b' }}>Против: {tally.against}</span>
+                </div>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                  {tally.total > 0 && (
+                    <div style={{ height: '100%', width: `${(tally.for / tally.total) * 100}%`, background: '#3ddc97', borderRadius: 2 }} />
+                  )}
+                </div>
+                {timeRemaining && <div style={{ fontSize: 11, color: '#f6c177', marginTop: 4 }}>{timeRemaining}</div>}
+              </div>
+            )}
 
-        {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-            <Link
-              href={`/propose?open=${encodeURIComponent(proposal.id)}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                padding: '8px 10px',
-                borderRadius: 10,
-                border: '1px solid var(--border)',
-                background: 'rgba(255,255,255,0.06)',
-                color: 'var(--text)',
-                fontSize: 13,
-                textDecoration: 'none',
-              }}
-            >
-              Редактировать
-            </Link>
-            <Button type="button" onClick={async () => {
-              if (!proposal) return;
-              if (!sessionVerified) {
-                setDeleteErr('Нажмите «Авторизоваться» в шапке и подпишите запрос в кошельке.');
-                return;
-              }
-              if (!signMessage) {
-                setDeleteErr('Кошелёк не поддерживает подпись сообщений.');
-                return;
-              }
-              if (!window.confirm('Удалить предложение безвозвратно?')) return;
-              setDeleteBusy(true);
-              setDeleteErr(null);
-              try {
-                const message = `diploma-z96a propose:delete:${proposal.id}`;
-                const sigBytes = await signMessage(new TextEncoder().encode(message));
-                const res = await fetch(`/api/proposals/${proposal.id}`, {
-                  method: 'DELETE',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ authorPubkey: pubkey, signature: bs58.encode(sigBytes) }),
-                });
-                if (!res.ok) {
-                  const d = (await res.json().catch(() => ({}))) as { error?: string };
-                  throw new Error(d.error || `HTTP ${res.status}`);
-                }
-                router.push('/networks');
-              } catch (e: unknown) {
-                setDeleteErr(e instanceof Error ? e.message : 'Ошибка удаления');
-              } finally {
-                setDeleteBusy(false);
-              }
-            }} disabled={deleteBusy || !sessionVerified || !signMessage}>
-              {deleteBusy ? 'Удаление…' : 'Удалить сеть'}
-            </Button>
-          </div>
+            {proposal.status === 'SUBMITTED' && publicKey && (!tally || tally.userVote === null) && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                <Button onClick={() => handleVote('FOR')} disabled={voting || !sessionVerified}>
+                  За
+                </Button>
+                <Button onClick={() => handleVote('AGAINST')} disabled={voting || !sessionVerified}>
+                  Против
+                </Button>
+              </div>
+            )}
+            {voteError && <p style={{ fontSize: 11, color: '#ff6b6b' }}>{voteError}</p>}
+            {tally?.userVote && <p style={{ fontSize: 11, color: '#3ddc97' }}>Вы проголосовали: {tally.userVote === 'FOR' ? 'За' : 'Против'}</p>}
+
+            {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                <Link
+                  href={`/propose?open=${encodeURIComponent(proposal.id)}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: '1px solid var(--border)',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: 'var(--text)',
+                    fontSize: 13,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Редактировать
+                </Link>
+                <Button type="button" onClick={async () => {
+                  if (!proposal) return;
+                  if (!sessionVerified) {
+                    setDeleteErr('Нажмите «Авторизоваться» в шапке и подпишите запрос в кошельке.');
+                    return;
+                  }
+                  if (!signMessage) {
+                    setDeleteErr('Кошелёк не поддерживает подпись сообщений.');
+                    return;
+                  }
+                  if (!window.confirm('Удалить предложение безвозвратно?')) return;
+                  setDeleteBusy(true);
+                  setDeleteErr(null);
+                  try {
+                    const message = `diploma-z96a propose:delete:${proposal.id}`;
+                    const sigBytes = await signMessage(new TextEncoder().encode(message));
+                    const res = await fetch(`/api/proposals/${proposal.id}`, {
+                      method: 'DELETE',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ authorPubkey: pubkey, signature: bs58.encode(sigBytes) }),
+                    });
+                    if (!res.ok) {
+                      const d = (await res.json().catch(() => ({}))) as { error?: string };
+                      throw new Error(d.error || `HTTP ${res.status}`);
+                    }
+                    router.push('/networks');
+                  } catch (e: unknown) {
+                    setDeleteErr(e instanceof Error ? e.message : 'Ошибка удаления');
+                  } finally {
+                    setDeleteBusy(false);
+                  }
+                }} disabled={deleteBusy || !sessionVerified || !signMessage}>
+                  {deleteBusy ? 'Удаление…' : 'Удалить сеть'}
+                </Button>
+              </div>
+            )}
+            {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && !sessionVerified && (
+              <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                Чтобы удалить предложение, сначала нажмите «Авторизоваться» в шапке сайта.
+              </p>
+            )}
+            {deleteErr && <p style={{ fontSize: 11, color: '#ff6b6b', marginTop: 6 }}>{deleteErr}</p>}
+          </>
         )}
-        {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && !sessionVerified && (
-          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
-            Чтобы удалить предложение, сначала нажмите «Авторизоваться» в шапке сайта.
-          </p>
-        )}
-        {deleteErr && <p style={{ fontSize: 11, color: '#ff6b6b', marginTop: 6 }}>{deleteErr}</p>}
 
         {/* View toggle */}
         <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
@@ -812,23 +833,25 @@ export default function ProposalViewPage() {
         </div>
 
         {/* Element list */}
-        <div style={{ marginTop: 12, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Элементы:</div>
-          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-            {proposalElements.slice(0, 50).map((el, i) => {
-              const type = el.type as string;
-              const isCbl = isCableType(type);
-              const c = isCbl ? (CABLE_COLORS[type] || '#ccc') : (NODE_VISUALS[type] ? '#' + NODE_VISUALS[type].color.toString(16).padStart(6, '0') : '#ccc');
-              return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 11, color: 'var(--muted)' }}>
-                  <span style={{ width: isCbl ? 12 : 8, height: isCbl ? 4 : 8, borderRadius: isCbl ? 1 : '50%', background: c, flexShrink: 0 }} />
-                  {TYPE_LABELS_RU[type] || type}: {(el.name as string) || '—'}
-                </div>
-              );
-            })}
-            {proposalElements.length > 50 && <div style={{ fontSize: 11, color: 'var(--muted)' }}>+{proposalElements.length - 50} ещё</div>}
+        {isDetailsOpen && (
+          <div style={{ marginTop: 12, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Элементы:</div>
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {proposalElements.slice(0, 50).map((el, i) => {
+                const type = el.type as string;
+                const isCbl = isCableType(type);
+                const c = isCbl ? (CABLE_COLORS[type] || '#ccc') : (NODE_VISUALS[type] ? '#' + NODE_VISUALS[type].color.toString(16).padStart(6, '0') : '#ccc');
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 11, color: 'var(--muted)' }}>
+                    <span style={{ width: isCbl ? 12 : 8, height: isCbl ? 4 : 8, borderRadius: isCbl ? 1 : '50%', background: c, flexShrink: 0 }} />
+                    {TYPE_LABELS_RU[type] || type}: {(el.name as string) || '—'}
+                  </div>
+                );
+              })}
+              {proposalElements.length > 50 && <div style={{ fontSize: 11, color: 'var(--muted)' }}>+{proposalElements.length - 50} ещё</div>}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

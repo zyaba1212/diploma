@@ -1,16 +1,11 @@
 // HTTP API /api/proposals/[id] — Next.js Route Handler.
+// PATCH/DELETE use dynamic import for crypto/Stage-7 modules so GET’s server chunk stays smaller (mitigates Windows webpack desync; see next.config.mjs).
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import type { ProposalStatus } from '@prisma/client';
-import nacl from 'tweetnacl';
-import bs58 from 'bs58';
 import { getClientIp, checkRateLimit } from '@/lib/rateLimit';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
-import { canPatchProposalMetadata } from '@/lib/stage7/proposalMutationPolicy';
-import { computeProposalContentHashHexFromDbActions } from '@/lib/stage7/proposalContentHashServer';
-import { internalApiError } from '@/lib/apiError';
-import { hardDeleteProposalInTransaction } from '@/lib/proposals/hardDeleteProposalInTransaction';
 import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type Params = {
@@ -66,6 +61,16 @@ type PatchBody = {
 export async function PATCH(req: Request, { params }: Params) {
   const tooBig = assertBodySizeWithin(req, 50_000);
   if (tooBig) return tooBig;
+
+  const [{ default: nacl }, { default: bs58 }, { canPatchProposalMetadata }, { computeProposalContentHashHexFromDbActions }, { internalApiError }] =
+    await Promise.all([
+      import('tweetnacl'),
+      import('bs58'),
+      import('@/lib/stage7/proposalMutationPolicy'),
+      import('@/lib/stage7/proposalContentHashServer'),
+      import('@/lib/apiError'),
+    ]);
+
   const { id } = await params;
   if (!id || typeof id !== 'string') {
     return NextResponse.json({ error: 'invalid id' }, { status: 400 });
@@ -207,6 +212,12 @@ export async function PATCH(req: Request, { params }: Params) {
 export async function DELETE(req: Request, { params }: Params) {
   const tooBig = assertBodySizeWithin(req, 10_000);
   if (tooBig) return tooBig;
+
+  const [{ default: nacl }, { default: bs58 }, { hardDeleteProposalInTransaction }] = await Promise.all([
+    import('tweetnacl'),
+    import('bs58'),
+    import('@/lib/proposals/hardDeleteProposalInTransaction'),
+  ]);
 
   const { id } = await params;
   if (!id || typeof id !== 'string') {

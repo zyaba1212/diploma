@@ -1,6 +1,7 @@
 'use client';
 
 import { ButtonHTMLAttributes } from 'react';
+import { colors } from '@/theme/colors';
 
 export function Button({
   variant = 'default',
@@ -8,19 +9,21 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'default' | 'danger' }) {
   const base: React.CSSProperties = {
     appearance: 'none',
-    borderRadius: 10,
-    border: '1px solid var(--border)',
-    background: 'rgba(255,255,255,0.06)',
-    color: 'var(--text)',
-    padding: '8px 10px',
+    borderRadius: 4,
+    border: `1px solid ${colors.accent}`,
+    background: 'transparent',
+    color: colors.text.primary,
+    padding: '8px 16px',
     cursor: 'pointer',
     fontSize: 13,
+    transition: 'background-color 0.1s ease, color 0.1s ease',
   };
   const danger: React.CSSProperties =
     variant === 'danger'
       ? {
-          borderColor: 'rgba(255,107,107,0.35)',
-          background: 'rgba(255,107,107,0.12)',
+          borderColor: colors.status.failure,
+          background: colors.bg.primary,
+          color: colors.text.primary,
         }
       : {};
 

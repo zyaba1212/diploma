@@ -16,9 +16,8 @@ export function Panel({
       style={{
         background: 'var(--panel)',
         border: '1px solid var(--border)',
-        borderRadius: 12,
-        padding: 12,
-        backdropFilter: 'blur(10px)',
+        borderRadius: 4,
+        padding: 16,
         ...style,
       }}
     >
@@ -29,4 +28,3 @@ export function Panel({
     </section>
   );
 }
-

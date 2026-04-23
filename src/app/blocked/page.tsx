@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { colors } from '@/theme/colors';
 
 type BanInfoResponse = {
   isBanned: boolean;
@@ -32,10 +32,10 @@ function formatBannedBy(data: BanInfoResponse): string {
   return 'Администратор';
 }
 
-export default function BlockedPage() {
+function BlockedPageContent() {
   const walletPubkey = useAuthorPubkey();
   const searchParams = useSearchParams();
-  const queryPubkey = searchParams.get('pubkey')?.trim() || null;
+  const queryPubkey = searchParams?.get('pubkey')?.trim() || null;
   const pubkey = queryPubkey || walletPubkey;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,14 +88,14 @@ export default function BlockedPage() {
   }, [pubkey, loading, error, isBanned]);
 
   return (
-    <main style={{ minHeight: '100vh', padding: '84px 16px 24px', background: 'var(--bg, #0a0a12)', color: 'var(--text, #eee)' }}>
-      <div style={{ maxWidth: 720, margin: '0 auto', border: '1px solid rgba(255,107,107,0.4)', borderRadius: 14, padding: 16, background: 'rgba(255,107,107,0.08)' }}>
+    <main style={{ minHeight: '100vh', padding: '84px 16px 24px', background: colors.bg.primary, color: colors.text.primary }}>
+      <div style={{ maxWidth: 720, margin: '0 auto', border: `1px solid ${colors.status.failure}`, borderRadius: 4, padding: 16, background: colors.bg.card }}>
         <h1 style={{ margin: 0, fontSize: 26 }}>Аккаунт заблокирован</h1>
-        <p style={{ marginTop: 8, marginBottom: 0, color: 'var(--muted)' }}>{bannerText}</p>
+        <p style={{ marginTop: 8, marginBottom: 0, color: colors.text.secondary }}>{bannerText}</p>
       </div>
 
       {isBanned ? (
-        <section style={{ maxWidth: 720, margin: '12px auto 0', border: '1px solid var(--border)', borderRadius: 12, padding: 16, background: 'rgba(255,255,255,0.04)' }}>
+        <section style={{ maxWidth: 720, margin: '12px auto 0', border: `1px solid ${colors.border}`, borderRadius: 4, padding: 16, background: colors.bg.card }}>
           <div style={{ display: 'grid', gap: 10 }}>
             <div><strong>Кошелек:</strong> {ban.pubkey ?? pubkey ?? '—'}</div>
             <div><strong>Когда забанен:</strong> {formatDateRu(ban.bannedAt)}</div>
@@ -105,11 +105,14 @@ export default function BlockedPage() {
         </section>
       ) : null}
 
-      <div style={{ maxWidth: 720, margin: '12px auto 0' }}>
-        <Link href="/" style={{ color: '#8ab4f8', textDecoration: 'none', fontWeight: 600 }}>
-          На главную
-        </Link>
-      </div>
     </main>
+  );
+}
+
+export default function BlockedPage() {
+  return (
+    <Suspense fallback={<main style={{ padding: 24, minHeight: '40vh', color: 'var(--muted)' }}>Загрузка…</main>}>
+      <BlockedPageContent />
+    </Suspense>
   );
 }

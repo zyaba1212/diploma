@@ -38,6 +38,7 @@ const PROVIDER_SOURCE_URL = 'https://data.gov.au/data/dataset/fibre-optic-cable'
 
 const PROVIDER_LICENSE_NOTE =
   'CC BY 3.0 Australia — City of Gold Coast. Attribution required; locations/dimensions/depths must be confirmed on site.';
+const UNDERGROUND_DATASET = 'gold_coast_fibre_optic_cable';
 
 function parseArgs(argv) {
   let dryRun = false;
@@ -109,6 +110,30 @@ function sourceIdForSegmentScoped(feature, segIdx, scope) {
   return segIdx === 0 ? `${providerId}-${fid}` : `${providerId}-${fid}-s${segIdx}`;
 }
 
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = (x) => (x * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function pathLengthKm(path) {
+  if (!Array.isArray(path) || path.length < 2) return 0;
+  let km = 0;
+  for (let i = 1; i < path.length; i++) km += haversineKm(path[i - 1], path[i]);
+  return km;
+}
+
+function computeGoldCoastMetrics(path) {
+  return { lengthKm: pathLengthKm(path) };
+}
+
 async function loadGeoJson(url, filePath) {
   if (filePath) {
     const raw = await readFile(filePath, 'utf8');
@@ -165,6 +190,7 @@ async function main() {
       const name = segments > 1 ? `${baseName} (segment ${segIdx + 1}/${segments})` : baseName;
 
       const color = '#7aa2ff'; // fiber
+      const metrics = computeGoldCoastMetrics(path);
 
       upserts.push({
         where: { sourceId },
@@ -176,13 +202,15 @@ async function main() {
           name,
           path,
           metadata: {
-            dataset: 'gold_coast_fibre_optic_cable',
+            dataset: UNDERGROUND_DATASET,
+            sourceClass: 'official',
             licenseNote: PROVIDER_LICENSE_NOTE,
             transportMode: 'underground',
             underground: true,
             submarine: false,
             cableMaterial: 'fiber',
             color,
+            lengthKm: Number(metrics.lengthKm.toFixed(2)),
             // Physical depth isn't exposed in the WFS GeoJSON; keep explicit null for the renderer.
             depthMeters: null,
             featureId: idForFeature(feature),
@@ -199,13 +227,15 @@ async function main() {
           path,
           providerId,
           metadata: {
-            dataset: 'gold_coast_fibre_optic_cable',
+            dataset: UNDERGROUND_DATASET,
+            sourceClass: 'official',
             licenseNote: PROVIDER_LICENSE_NOTE,
             transportMode: 'underground',
             underground: true,
             submarine: false,
             cableMaterial: 'fiber',
             color,
+            lengthKm: Number(metrics.lengthKm.toFixed(2)),
             depthMeters: null,
             featureId: idForFeature(feature),
             folder: typeof props.Folder === 'string' ? props.Folder : null,

@@ -13,6 +13,7 @@ import {
   updateGlobeFrontLabelsVisibility,
 } from '@/lib/three/globeAppearance';
 import { TYPE_LABELS_RU } from '@/lib/three/factories';
+import { colors } from '@/theme/colors';
 import { normalizeLatLng } from '@/lib/geo/normalizeLatLng';
 import {
   SATELLITE_MIN_VISIBLE_ZOOM,
@@ -39,6 +40,10 @@ function isSatelliteElType(t: unknown): boolean {
 
 type ViewMode = 'GLOBE_3D' | 'MAP_2D';
 
+type EarthSceneProps = {
+  satelliteNameQuery?: string | null;
+};
+
 type GlobeNetworkElementCard = {
   x: number;
   y: number;
@@ -50,6 +55,40 @@ type GlobeNetworkElementCard = {
   metadata: Record<string, unknown> | null;
   scope: string;
 };
+
+function metadataRecord(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
+  return metadata && typeof metadata === 'object' ? metadata : null;
+}
+
+function metadataString(metadata: Record<string, unknown> | null, key: string): string | null {
+  const m = metadataRecord(metadata);
+  const raw = m?.[key];
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function metadataYearValue(metadata: Record<string, unknown> | null, key: string): number | null {
+  const m = metadataRecord(metadata);
+  const raw = m?.[key];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && /^\d{4}$/.test(raw.trim())) return Number(raw.trim());
+  return null;
+}
+
+function isOsmCableDataset(metadata: Record<string, unknown> | null): boolean {
+  const dataset = metadataRecord(metadata)?.dataset;
+  return dataset === 'openstreetmap' || dataset === 'osm_terrestrial_fibre';
+}
+
+function osmOperatorFromMetadata(metadata: Record<string, unknown> | null): string | null {
+  if (!isOsmCableDataset(metadata)) return null;
+  const meta = metadataRecord(metadata);
+  const osm = meta?.osm;
+  if (!osm || typeof osm !== 'object' || Array.isArray(osm)) return null;
+  const tags = (osm as Record<string, unknown>).tags;
+  if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return null;
+  const raw = (tags as Record<string, unknown>).operator;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
 
 /** Ранее использовался для авто-возврата в 3D; убран — ломал ручной режим «2D». */
 const ZOOM_MIN = 1.2;
@@ -96,6 +135,13 @@ function formatLocationLabel(data: NominatimReverseResult | null): string {
   return '—';
 }
 
+function sourceClassLabel(value: unknown): string | null {
+  if (value === 'official') return 'Официальный';
+  if (value === 'osm_verified') return 'OSM (проверенный)';
+  if (value === 'synthetic') return 'Модельный';
+  return null;
+}
+
 function GlobeLegendBody() {
   return (
     <>
@@ -120,7 +166,6 @@ function GlobeLegendBody() {
       ))}
       <div style={{ marginTop: 4, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 4 }} />
       {[
-        { color: '#7aa2ff', label: 'Провайдер', shape: '◎' },
         { color: '#3ddc97', label: 'Сервер / Дата-центр', shape: '▮' },
         { color: '#f6c177', label: 'Коммутатор', shape: '▬' },
         { color: '#e6a7ff', label: 'Мультиплексор', shape: '⊛' },
@@ -158,7 +203,7 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number): Promise<
   }
 }
 
-function EarthSceneComponent() {
+function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -480,8 +525,62 @@ function EarthSceneComponent() {
     };
 
     const raycaster = new THREE.Raycaster();
-    raycaster.params.Line = { threshold: 0.015 };
+    raycaster.params.Line = { threshold: 0.01 };
     const mouseNDC = new THREE.Vector2();
+    const MAX_HIT_DISTANCE_BEHIND_GLOBE = 0.028;
+
+    /** Меньше — выше приоритет при сортировке кандидатов (см. pickNetworkElementObjectAt). */
+    const getNetworkElTypePriority = (elType: unknown): number => {
+      if (typeof elType !== 'string') return 99;
+      if (isSatelliteElType(elType)) return 1;
+      if (elType.startsWith('CABLE_')) return 3;
+      return 2;
+    };
+
+    const pickNetworkElementObjectAt = (clientX: number, clientY: number): THREE.Object3D | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const cam = cameraRef.current;
+      if (!cam) return null;
+      raycaster.setFromCamera(mouseNDC, cam);
+
+      const globeHit = raycaster.intersectObject(globe, false)[0];
+      const globeDistance = globeHit?.distance;
+      const hideSatellites = zoomRef.current < SATELLITE_MIN_VISIBLE_ZOOM;
+      const hits = raycaster.intersectObjects([globeNetworkElementsGroup], true);
+      const candidates: Array<{ obj: THREE.Object3D; distance: number; priority: number }> = [];
+      const seenKeys = new Set<string>();
+
+      for (const h of hits) {
+        if (
+          typeof globeDistance === 'number' &&
+          h.distance > globeDistance + MAX_HIT_DISTANCE_BEHIND_GLOBE
+        ) {
+          continue;
+        }
+        let obj: THREE.Object3D | null = h.object;
+        while (obj && !obj.userData?.elType) obj = obj.parent;
+        if (!obj?.userData?.elType) continue;
+        if (hideSatellites && isSatelliteElType(obj.userData.elType)) continue;
+        const dedupeKey =
+          (typeof obj.userData.hoverKey === 'string' && obj.userData.hoverKey) || obj.uuid;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+        candidates.push({
+          obj,
+          distance: h.distance,
+          priority: getNetworkElTypePriority(obj.userData.elType),
+        });
+      }
+
+      if (candidates.length === 0) return null;
+      candidates.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.distance - b.distance;
+      });
+      return candidates[0]?.obj ?? null;
+    };
 
     /** Луч из экранных координат → единичный вектор от центра глобуса к точке на сфере (world). */
     const setCurrGlobeDirFromClient = (clientX: number, clientY: number): boolean => {
@@ -533,22 +632,7 @@ function EarthSceneComponent() {
       clientX: number,
       clientY: number,
     ): THREE.Object3D['userData'] | null => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-      const cam = cameraRef.current;
-      if (!cam) return null;
-      raycaster.setFromCamera(mouseNDC, cam);
-      const hits = raycaster.intersectObjects([globeNetworkElementsGroup], true);
-      const hideSatellites = zoomRef.current < SATELLITE_MIN_VISIBLE_ZOOM;
-      for (const h of hits) {
-        let obj: THREE.Object3D | null = h.object;
-        while (obj && !obj.userData?.elType) obj = obj.parent;
-        if (!obj?.userData?.elType) continue;
-        if (hideSatellites && isSatelliteElType(obj.userData.elType)) continue;
-        return obj.userData;
-      }
-      return null;
+      return pickNetworkElementObjectAt(clientX, clientY)?.userData ?? null;
     };
 
     const clearHoverCard = () => {
@@ -780,22 +864,7 @@ function EarthSceneComponent() {
         clearHoverCard();
         return;
       }
-      mouseNDC.x = ((px - rect.left) / rect.width) * 2 - 1;
-      mouseNDC.y = -((py - rect.top) / rect.height) * 2 + 1;
-      const cam = cameraRef.current;
-      if (!cam) return;
-      raycaster.setFromCamera(mouseNDC, cam);
-      const hits = raycaster.intersectObjects([globeNetworkElementsGroup], true);
-      let found: THREE.Object3D | null = null;
-      const hideSatellites = zoomRef.current < SATELLITE_MIN_VISIBLE_ZOOM;
-      for (const h of hits) {
-        let obj: THREE.Object3D | null = h.object;
-        while (obj && !obj.userData?.elType) obj = obj.parent;
-        if (!obj?.userData?.elType) continue;
-        if (hideSatellites && isSatelliteElType(obj.userData.elType)) continue;
-        found = obj;
-        break;
-      }
+      const found = pickNetworkElementObjectAt(px, py);
       if (found) {
         const ud = found.userData;
         const key = `${ud.elType}|${String(ud.elName ?? '')}|${String(ud.providerId ?? '')}|${String(ud.hoverKey ?? '')}`;
@@ -1257,6 +1326,16 @@ function EarthSceneComponent() {
   // Единый источник отображения:
   // 1) pinnedElement (явное закрепление ЛКМ), иначе 2) hoveredElement (временный hover).
   const globeInfoCard = pinnedElement ?? hoveredElement;
+  const cardOwner =
+    metadataString(globeInfoCard?.metadata ?? null, 'owner');
+  const cardLaunchDate =
+    metadataString(globeInfoCard?.metadata ?? null, 'launchDate') ??
+    metadataString(globeInfoCard?.metadata ?? null, 'launch_date');
+  const cardLaunchYear =
+    metadataYearValue(globeInfoCard?.metadata ?? null, 'launchYear') ??
+    metadataYearValue(globeInfoCard?.metadata ?? null, 'launch_year');
+  const cardOsmOperator = osmOperatorFromMetadata(globeInfoCard?.metadata ?? null);
+  const providerLabel = isOsmCableDataset(globeInfoCard?.metadata ?? null) ? 'Источник данных' : 'Провайдер';
 
   return (
     <>
@@ -1351,14 +1430,13 @@ function EarthSceneComponent() {
             top: globeInfoCard.y + 14,
             zIndex: 120,
             pointerEvents: 'auto',
-            background: 'rgba(10,20,40,0.92)',
-            border: '1px solid rgba(120,160,255,0.35)',
-            borderRadius: 10,
+            background: colors.bg.card,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 4,
             padding: pinnedElement ? '10px 32px 10px 14px' : '10px 14px',
             maxWidth: 340,
-            backdropFilter: 'blur(8px)',
             fontSize: 13,
-            color: '#eaf2ff',
+            color: colors.text.primary,
             lineHeight: 1.5,
           }}
         >
@@ -1373,13 +1451,13 @@ function EarthSceneComponent() {
                 right: 6,
                 width: 26,
                 height: 26,
-                border: 'none',
-                borderRadius: 6,
+                borderRadius: 4,
                 cursor: 'pointer',
                 fontSize: 18,
                 lineHeight: 1,
-                color: '#eaf2ff',
-                background: 'rgba(120,160,255,0.2)',
+                color: colors.text.primary,
+                background: colors.bg.primary,
+                border: `1px solid ${colors.border}`,
               }}
             >
               ×
@@ -1388,17 +1466,44 @@ function EarthSceneComponent() {
           {globeInfoCard.elName && (
             <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 14 }}>{globeInfoCard.elName}</div>
           )}
-          <div style={{ color: 'rgba(180,210,255,0.85)', marginBottom: 2 }}>
+          <div style={{ color: colors.text.secondary, marginBottom: 2 }}>
             {TYPE_LABELS_RU[globeInfoCard.elType] ?? globeInfoCard.elType}
           </div>
           {globeInfoCard.providerName && (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Провайдер:</span> {globeInfoCard.providerName}
+              <span style={{ color: colors.text.secondary }}>{providerLabel}:</span> {globeInfoCard.providerName}
             </div>
           )}
+          {cardOsmOperator ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Оператор:</span> {cardOsmOperator}
+            </div>
+          ) : null}
+          {globeInfoCard.metadata?.sourceClass ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Класс источника:</span>{' '}
+              {sourceClassLabel(globeInfoCard.metadata.sourceClass) ?? String(globeInfoCard.metadata.sourceClass)}
+            </div>
+          ) : null}
+          {globeInfoCard.metadata?.sourceClass === 'synthetic' ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Статус:</span> Модельная трасса (справочная)
+            </div>
+          ) : null}
+          {isSatelliteElType(globeInfoCard.elType) && cardOwner ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Owner:</span> {cardOwner}
+            </div>
+          ) : null}
+          {isSatelliteElType(globeInfoCard.elType) && (cardLaunchDate || cardLaunchYear !== null) ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Запуск:</span>{' '}
+              {cardLaunchDate ?? (cardLaunchYear !== null ? String(cardLaunchYear) : '—')}
+            </div>
+          ) : null}
           {globeInfoCard.metadata?.countries ? (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Страны:</span>{' '}
+              <span style={{ color: colors.text.secondary }}>Страны:</span>{' '}
               {Array.isArray(globeInfoCard.metadata.countries)
                 ? (globeInfoCard.metadata.countries as string[]).join(', ')
                 : String(globeInfoCard.metadata.countries)}
@@ -1406,7 +1511,7 @@ function EarthSceneComponent() {
           ) : null}
           {globeInfoCard.metadata?.year ? (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Год:</span> {String(globeInfoCard.metadata.year)}
+              <span style={{ color: colors.text.secondary }}>Год:</span> {String(globeInfoCard.metadata.year)}
             </div>
           ) : null}
           {(() => {
@@ -1419,23 +1524,24 @@ function EarthSceneComponent() {
               metadata: globeInfoCard.metadata,
               elementSourceUrl: globeInfoCard.sourceUrl,
               providerSourceUrl,
+              satelliteNameQuery,
             });
             if (links.length === 0) return null;
             return (
               <div style={{ marginTop: 6, marginBottom: 2, fontSize: 12 }}>
-                <div style={{ color: '#8ab4f8', marginBottom: 4 }}>Источники</div>
+                <div style={{ color: colors.text.secondary, marginBottom: 4 }}>Источники</div>
                 {links.map((link) => (
                   <div key={`${link.label}:${link.href}`} style={{ marginBottom: 4 }}>
-                    <a href={link.href} target="_blank" rel="noopener noreferrer" style={{ color: '#a8c7ff' }}>
+                    <a href={link.href} target="_blank" rel="noopener noreferrer" style={{ color: colors.accent }}>
                       {link.label}
                     </a>
                     {link.domain ? (
-                      <span style={{ marginLeft: 6, color: 'rgba(180,210,255,0.72)', fontSize: 11 }}>
+                      <span style={{ marginLeft: 6, color: colors.text.secondary, fontSize: 11 }}>
                         ({link.domain})
                       </span>
                     ) : null}
                     {link.note ? (
-                      <div style={{ marginTop: 1, color: 'rgba(180,210,255,0.7)', fontSize: 11 }}>{link.note}</div>
+                      <div style={{ marginTop: 1, color: colors.text.secondary, fontSize: 11 }}>{link.note}</div>
                     ) : null}
                   </div>
                 ))}
@@ -1454,7 +1560,7 @@ function EarthSceneComponent() {
               (typeof wfs?.description === 'string' ? wfs.description : null);
             if (!desc || !String(desc).trim()) return null;
             return (
-              <div style={{ marginBottom: 2, fontStyle: 'italic', color: 'rgba(200,220,255,0.7)' }}>
+              <div style={{ marginBottom: 2, fontStyle: 'italic', color: colors.text.secondary }}>
                 {String(desc)}
               </div>
             );
@@ -1471,12 +1577,12 @@ function EarthSceneComponent() {
               <>
                 {typeof folder === 'string' && folder.trim() ? (
                   <div style={{ marginBottom: 2, fontSize: 12 }}>
-                    <span style={{ color: '#8ab4f8' }}>Папка (WFS):</span> {folder}
+                    <span style={{ color: colors.text.secondary }}>Папка (WFS):</span> {folder}
                   </div>
                 ) : null}
                 {typeof phone === 'string' && phone.trim() ? (
                   <div style={{ marginBottom: 2, fontSize: 12 }}>
-                    <span style={{ color: '#8ab4f8' }}>Телефон:</span> {phone}
+                    <span style={{ color: colors.text.secondary }}>Телефон:</span> {phone}
                   </div>
                 ) : null}
               </>
@@ -1484,10 +1590,10 @@ function EarthSceneComponent() {
           })()}
           {globeInfoCard.metadata?.operator ? (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Оператор:</span> {String(globeInfoCard.metadata.operator)}
+              <span style={{ color: colors.text.secondary }}>Оператор:</span> {String(globeInfoCard.metadata.operator)}
             </div>
           ) : null}
-          <div style={{ marginTop: 4, fontSize: 11, color: 'rgba(140,170,220,0.7)' }}>
+          <div style={{ marginTop: 4, fontSize: 11, color: colors.text.secondary }}>
             {pinnedElement ? 'Закреплено — ×, Esc или ЛКМ по фону глобуса. ' : null}
             {globeInfoCard.scope === 'GLOBAL' ? 'Глобальный' : globeInfoCard.scope === 'LOCAL' ? 'Локальный' : ''}
           </div>
@@ -1521,13 +1627,12 @@ function EarthSceneComponent() {
             style={{
               width: '100%',
               padding: '6px 10px',
-              borderRadius: 8,
-              border: `1px solid ${searchFocused ? 'rgba(138,180,248,0.8)' : 'rgba(120,160,255,0.2)'}`,
-              background: 'rgba(10,20,40,0.9)',
-              color: 'var(--text)',
+              borderRadius: 4,
+              border: `1px solid ${searchFocused ? colors.accent : colors.border}`,
+              background: colors.bg.card,
+              color: colors.text.primary,
               fontSize: 12,
               outline: 'none',
-              boxShadow: searchFocused ? '0 0 0 3px rgba(138,180,248,0.24)' : 'none',
             }}
           />
           {searchDropdownVisible && (
@@ -1538,9 +1643,9 @@ function EarthSceneComponent() {
                 left: 0,
                 right: 0,
                 marginTop: 4,
-                background: 'rgba(18,22,40,0.98)',
-                border: '1px solid rgba(120,160,255,0.2)',
-                borderRadius: 8,
+                background: colors.bg.card,
+                border: `1px solid ${colors.border}`,
+                borderRadius: 4,
                 maxHeight: 180,
                 overflowY: 'auto',
                 zIndex: 20,
@@ -1613,17 +1718,15 @@ function EarthSceneComponent() {
                 onClick={(e) => e.stopPropagation()}
                 style={{
                   marginBottom: 8,
-                  background: 'rgba(10,20,40,0.94)',
-                  border: '1px solid rgba(120,160,255,0.2)',
-                  borderRadius: 10,
+                  background: colors.bg.card,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 4,
                   padding: '10px 14px',
                   fontSize: 11,
-                  color: '#c8daf0',
+                  color: colors.text.primary,
                   lineHeight: 1.7,
-                  backdropFilter: 'blur(6px)',
                   maxHeight: 'min(22vh, 170px)',
                   overflowY: 'auto',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
                 }}
               >
                 <GlobeLegendBody />
@@ -1634,7 +1737,7 @@ function EarthSceneComponent() {
               onClick={() => setLegendOpen((prev) => !prev)}
               aria-expanded={legendOpen}
               aria-controls="globe-legend-panel"
-              style={{ padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.35)' }}
+              style={{ padding: '10px 14px' }}
             >
               {legendOpen ? 'Легенда ▲' : 'Легенда ▼'}
             </Button>
@@ -1685,7 +1788,8 @@ function EarthSceneComponent() {
                 background: 'rgba(0,0,0,0.6)', zIndex: 2,
               }}>
                 <div style={{
-                  background: 'var(--panel)', padding: 24, borderRadius: 12,
+                  background: colors.bg.card, padding: 24, borderRadius: 4,
+                  border: `1px solid ${colors.border}`,
                   maxWidth: 400, textAlign: 'center',
                 }}>
                   <p style={{ color: 'var(--danger)', marginBottom: 8 }}>Не удалось загрузить карту</p>
@@ -1694,9 +1798,9 @@ function EarthSceneComponent() {
                     type="button"
                     onClick={() => { setMapLoadError(null); setViewMode('MAP_2D'); }}
                     style={{
-                      marginTop: 12, padding: '6px 16px', borderRadius: 8,
-                      border: '1px solid var(--border)', background: 'var(--panel)',
-                      color: 'var(--text)', cursor: 'pointer',
+                      marginTop: 12, padding: '6px 16px', borderRadius: 4,
+                      border: `1px solid ${colors.accent}`, background: 'transparent',
+                      color: colors.text.primary, cursor: 'pointer',
                     }}
                   >
                     Повторить
@@ -1739,14 +1843,12 @@ function EarthSceneComponent() {
                 style={{
                   flex: 1,
                   padding: '8px 10px',
-                  borderRadius: 10,
-                  border: `1px solid ${searchFocused ? 'rgba(138,180,248,0.8)' : 'var(--border)'}`,
-                  background: 'rgba(255,255,255,0.06)',
-                  color: 'var(--text)',
+                  borderRadius: 4,
+                  border: `1px solid ${searchFocused ? colors.accent : colors.border}`,
+                  background: colors.bg.primary,
+                  color: colors.text.primary,
                   outline: 'none',
                   fontSize: 13,
-                  boxShadow: searchFocused ? '0 0 0 3px rgba(138,180,248,0.24)' : 'none',
-                  transition: 'border-color 160ms ease, box-shadow 160ms ease',
                 }}
               />
               {searchQuery.trim().length > 0 ? (
@@ -1771,9 +1873,9 @@ function EarthSceneComponent() {
               <div
                 style={{
                   marginTop: 8,
-                  borderRadius: 12,
-                  border: '1px solid var(--border)',
-                  background: 'rgba(0,0,0,0.35)',
+                  borderRadius: 4,
+                  border: `1px solid ${colors.border}`,
+                  background: colors.bg.card,
                   padding: 4,
                   // Make at most ~3 items visible, then allow scrolling for the rest.
                   maxHeight: searchResults.length > 3 ? 3 * 40 : undefined,
@@ -1794,10 +1896,10 @@ function EarthSceneComponent() {
                         width: '100%',
                         textAlign: 'left',
                         padding: '8px 8px',
-                        borderRadius: 10,
+                        borderRadius: 4,
                         border: 'none',
                         background: 'transparent',
-                        color: 'var(--text)',
+                        color: colors.text.primary,
                         cursor: 'pointer',
                         fontSize: 13,
                       }}
@@ -1843,16 +1945,15 @@ function EarthSceneComponent() {
                   style={{
                     width: 36,
                     height: 36,
-                    borderRadius: 8,
-                    border: '1px solid var(--border)',
-                    background: 'rgba(0,0,0,0.45)',
-                    color: 'var(--text)',
+                    borderRadius: 4,
+                    border: `1px solid ${colors.border}`,
+                    background: colors.bg.card,
+                    color: colors.text.primary,
                     fontSize: 16,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    backdropFilter: 'blur(6px)',
                   }}
                 >
                   {dir.label}

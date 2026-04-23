@@ -33,7 +33,7 @@
 В схеме Prisma сейчас **минимальный** enum `NetworkElementType` (ровно **18** значений):
 
 - кабели: `CABLE_COPPER`, `CABLE_FIBER`, `CABLE_UNDERGROUND_COPPER`, `CABLE_UNDERGROUND_FIBER`;
-- узлы/оборудование: `PROVIDER`, `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`, `BASE_STATION`, `SATELLITE`, `EQUIPMENT`;
+- узлы/оборудование: `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`, `BASE_STATION`, `SATELLITE`, `EQUIPMENT`;
 - офлайн: `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE`.
 
 Отдельные «топологические» и узкоспециализированные типы (BRAS, OLT, воздушный/внутриобъектный кабель и т.п.) **не** входят в enum — это осознанное упрощение. Детали предметной области можно класть в **`metadata` (JSON)** или расширять enum отдельной миграцией, если понадобится.
@@ -125,9 +125,41 @@ OSM Telecoms / теги: [Telecoms - OpenStreetMap Wiki](https://wiki.openstreet
 
 Ссылка на формат TLE: [Celestrak NORAD elements (gp.php)](https://celestrak.org/NORAD/elements/gp.php).
 
-### 4.5. Узлы сети (PROVIDER/SERVER/SWITCH/...) как инференс-позиции
+#### Бэкфилл SATCAT metadata (owner / launchDate / launchYear)
 
-Типы `PROVIDER`, `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM` в текущей реализации заполняются **инференсом**: позиции вычисляются из геометрии уже импортированных кабелей (`NetworkElement.path`), чтобы на глобусе были “узлы” для визуального слоя.
+Для старых спутниковых записей, где в `metadata` ещё нет `owner`/`launch*`, используется отдельный idempotent-бэкфилл:
+
+- скрипт: **`scripts/backfill-satellite-satcat-metadata.mjs`**
+- npm alias: **`npm run scripts:backfill-satellite-satcat-metadata`**
+- источник: Celestrak SATCAT (`records.php?CATNR=...&FORMAT=JSON`)
+
+Рекомендуемый rollout:
+
+1. Dry run на ограниченной выборке:
+   - `npm run scripts:backfill-satellite-satcat-metadata -- --dry-run --limit 100`
+2. Пробный запуск в малом батче:
+   - `npm run scripts:backfill-satellite-satcat-metadata -- --limit 300 --batch-size 60 --concurrency 4`
+3. Полный прогон:
+   - `npm run scripts:backfill-satellite-satcat-metadata -- --batch-size 120 --concurrency 6`
+
+Безопасные параметры по умолчанию:
+
+- `--batch-size 120`
+- `--concurrency 6`
+- `--max-retries 2`
+- `--retry-delay-ms 350`
+
+Поддерживаются env-переопределения:
+
+- `CELESTRAK_SATCAT_URL`
+- `CELESTRAK_SATCAT_TIMEOUT_MS`
+- `CELESTRAK_SATCAT_CONCURRENCY`
+
+Цель бэкфилла: сделать `owner/launch` доступными сразу в `GET /api/network`, без поздней догрузки в карточке.
+
+### 4.5. Узлы сети (SERVER/SWITCH/...) как инференс-позиции
+
+Типы `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM` в текущей реализации заполняются **инференсом**: позиции вычисляются из геометрии уже импортированных кабелей (`NetworkElement.path`), чтобы на глобусе были “узлы” для визуального слоя.
 
 - скрипт: **`scripts/sync-derived-nodes-from-cables.mjs`**
 - заметка: это не прямой импорт конкретного оборудования (отдельного open-датасета с координатами для каждого типа в текущем проекте может не быть), поэтому в `metadata` сохраняется пометка `dataset: derived-from-cables` и список `derivedFromCableSourceIds`.

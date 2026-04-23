@@ -17,7 +17,7 @@ function shouldSkipPath(pathname: string): boolean {
 export function BannedRedirectGuard() {
   const wallet = useWallet();
   const pubkey = useAuthorPubkey();
-  const pathname = usePathname();
+  const pathname = usePathname() ?? '';
   const router = useRouter();
 
   useEffect(() => {

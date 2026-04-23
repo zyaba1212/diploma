@@ -23,7 +23,6 @@ const NETWORK_ELEMENT_TYPES: string[] = [
   'CABLE_FIBER',
 
   // Node types
-  'PROVIDER',
   'SERVER',
   'SWITCH',
   'MULTIPLEXER',

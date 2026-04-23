@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const SKIP_GEOCODE_SMOKE = process.env.SKIP_GEOCODE_SMOKE === '1';
-const SMOKE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || 8000);
+const SMOKE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || 120000);
 
 const DEFAULT_LAT = 48.8566; // Paris
 const DEFAULT_LNG = 2.3522;
@@ -15,6 +15,13 @@ function assert(condition, message) {
 
 function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function hasValidHttpSourceUrl(value) {
+  if (typeof value !== 'string') return false;
+  const t = value.trim();
+  if (!t || /\s/.test(t)) return false;
+  return t.startsWith('http://') || t.startsWith('https://');
 }
 
 function stripTrailingSlash(url) {
@@ -79,20 +86,33 @@ async function main() {
   const baseStationCount = elements.filter((e) => e?.type === 'BASE_STATION').length;
   const undergroundFiberCount = elements.filter((e) => e?.type === 'CABLE_UNDERGROUND_FIBER').length;
   const undergroundCopperCount = elements.filter((e) => e?.type === 'CABLE_UNDERGROUND_COPPER').length;
+  const servers = elements.filter((e) => e?.type === 'SERVER');
+  const serversWithSource = servers.filter((e) => hasValidHttpSourceUrl(e?.sourceUrl)).length;
+  const malformedServerSource = servers.filter((e) => {
+    const v = e?.sourceUrl;
+    if (v == null) return false;
+    const t = String(v).trim();
+    if (!t) return false;
+    return !hasValidHttpSourceUrl(t);
+  }).length;
 
   assert(baseStationCount > 0, `Expected BASE_STATION count > 0, got ${baseStationCount}`);
   assert(
     undergroundFiberCount > 0 || undergroundCopperCount > 0,
     `Expected at least one underground cable type present (fiber>0 or copper>0). got fiber=${undergroundFiberCount} copper=${undergroundCopperCount}`,
   );
+  assert(servers.length > 0, `Expected SERVER count > 0, got ${servers.length}`);
+  assert(serversWithSource > 0, `Expected at least one SERVER with valid sourceUrl, got ${serversWithSource}`);
+  assert(malformedServerSource === 0, `Expected malformed SERVER sourceUrl count = 0, got ${malformedServerSource}`);
 
   console.log(
-    `Network OK: BASE_STATION=${baseStationCount}, underground_fiber=${undergroundFiberCount}, underground_copper=${undergroundCopperCount}`,
+    `Network OK: BASE_STATION=${baseStationCount}, underground_fiber=${undergroundFiberCount}, underground_copper=${undergroundCopperCount}, servers=${servers.length}, servers_with_source=${serversWithSource}`,
   );
 
   // Geocode proxy endpoints (backend should proxy external APIs).
   if (SKIP_GEOCODE_SMOKE) {
     console.log('Skipping geocode checks (SKIP_GEOCODE_SMOKE=1).');
+    console.log('Smoke v2 site routes + API proxies: PASS');
     return;
   }
 

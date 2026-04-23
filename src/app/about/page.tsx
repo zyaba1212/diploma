@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import { colors } from '@/theme/colors';
 
 export const metadata: Metadata = {
   title: 'О проекте',
@@ -7,12 +8,10 @@ export const metadata: Metadata = {
 };
 
 const cardBase: React.CSSProperties = {
-  background: 'linear-gradient(155deg, rgba(122, 162, 255, 0.1), rgba(168, 85, 247, 0.07))',
-  border: '1px solid var(--border)',
-  borderRadius: 18,
-  padding: '24px 26px',
-  backdropFilter: 'blur(14px)',
-  boxShadow: '0 10px 36px rgba(0, 0, 0, 0.28)',
+  background: colors.bg.card,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 4,
+  padding: 16,
 };
 
 const labelStyle: React.CSSProperties = {
@@ -33,25 +32,11 @@ export default function AboutPage() {
         paddingLeft: 24,
         paddingRight: 24,
         paddingBottom: 48,
-        color: 'var(--text)',
+        color: colors.text.primary,
+        background: colors.bg.primary,
       }}
     >
       <div style={{ maxWidth: 880, width: '100%', margin: '0 auto', position: 'relative' }}>
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            top: -30,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: 'min(90vw, 560px)',
-            height: 200,
-            background:
-              'radial-gradient(ellipse at center, rgba(122, 162, 255, 0.18) 0%, rgba(168, 85, 247, 0.08) 40%, transparent 72%)',
-            pointerEvents: 'none',
-          }}
-        />
-
         <header style={{ marginBottom: 36, position: 'relative' }}>
           <p
             style={{
@@ -70,12 +55,9 @@ export default function AboutPage() {
               fontSize: 'clamp(1.6rem, 3.5vw, 2.25rem)',
               lineHeight: 1.15,
               margin: 0,
-              fontWeight: 800,
+              fontWeight: 600,
               letterSpacing: '-0.03em',
-              background: 'linear-gradient(115deg, #c4b5fd 0%, #7aa2ff 50%, #38bdf8 100%)',
-              WebkitBackgroundClip: 'text',
-              backgroundClip: 'text',
-              color: 'transparent',
+              color: colors.text.primary,
             }}
           >
             О проекте
@@ -90,7 +72,7 @@ export default function AboutPage() {
             </div>
             <div style={{ fontSize: 15, color: 'var(--muted)', lineHeight: 1.55 }}>
               Белорусская Государственная Академия Связи{' '}
-              <span style={{ color: 'rgba(232, 236, 255, 0.85)' }}>(БГАС)</span>
+              <span style={{ color: colors.text.secondary }}>(БГАС)</span>
             </div>
           </section>
 
@@ -123,7 +105,7 @@ export default function AboutPage() {
                 padding: '0 0 0 18px',
                 fontSize: 15,
                 lineHeight: 1.85,
-                color: 'rgba(232, 236, 255, 0.92)',
+                color: colors.text.primary,
               }}
             >
               <li><strong style={{ color: 'var(--text)' }}>Next.js</strong> — маршрутизация и UI</li>
@@ -142,7 +124,7 @@ export default function AboutPage() {
                 padding: '0 0 0 18px',
                 fontSize: 15,
                 lineHeight: 1.85,
-                color: 'rgba(232, 236, 255, 0.92)',
+                color: colors.text.primary,
               }}
             >
               <li>Визуализация глобальной инфокоммуникационной инфраструктуры в 3D и на карте</li>

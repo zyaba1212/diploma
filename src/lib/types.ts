@@ -7,7 +7,6 @@ export type NetworkElementType =
   | 'CABLE_FIBER'
 
   // Node types (network elements)
-  | 'PROVIDER'
   | 'SERVER'
   | 'SWITCH'
   | 'MULTIPLEXER'

@@ -9,7 +9,6 @@ const scope = (process.argv[2] ?? "GLOBAL").toUpperCase();
 const types = [
   "CABLE_UNDERGROUND_COPPER",
   "CABLE_UNDERGROUND_FIBER",
-  "PROVIDER",
   "SERVER",
   "SATELLITE",
   "BASE_STATION",

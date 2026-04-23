@@ -23,7 +23,7 @@ export function Tabs({ items, role }: { items: TabItem[]; role: 'ADMIN' | 'MODER
     gap: 4,
     padding: 4,
     border: '1px solid var(--border)',
-    borderRadius: 12,
+    borderRadius: 4,
     background: 'var(--panel)',
     marginBottom: 12,
   };
@@ -34,16 +34,15 @@ export function Tabs({ items, role }: { items: TabItem[]; role: 'ADMIN' | 'MODER
         const active = pathname === it.href || pathname?.startsWith(`${it.href}/`);
         const linkStyle: CSSProperties = {
           padding: '6px 12px',
-          borderRadius: 8,
+          borderRadius: 4,
           fontSize: 13,
           fontWeight: active ? 600 : 400,
           color: active ? 'var(--text)' : 'var(--muted)',
-          background: active ? 'rgba(255,255,255,0.08)' : 'transparent',
+          background: active ? 'var(--table-row-hover)' : 'transparent',
           textDecoration: 'none',
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
-          transition: 'background 0.15s',
         };
         return (
           <Link key={it.href} href={it.href} style={linkStyle} prefetch={false}>
@@ -52,9 +51,9 @@ export function Tabs({ items, role }: { items: TabItem[]; role: 'ADMIN' | 'MODER
               <span
                 style={{
                   padding: '0 6px',
-                  borderRadius: 10,
+                  borderRadius: 4,
                   fontSize: 11,
-                  background: 'rgba(255,255,255,0.12)',
+                  background: 'var(--table-row-hover)',
                 }}
               >
                 {it.badge}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
@@ -35,6 +35,8 @@ export function AdminAuditClient() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copiedWallet, setCopiedWallet] = useState<string | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const copyToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadPage = useCallback(async (opts: { reset: boolean; cursor?: string | null }) => {
     setLoading(true);
@@ -59,18 +61,41 @@ export function AdminAuditClient() {
     void loadPage({ reset: true });
   }, [loadPage]);
 
-  const copyWallet = useCallback(async (wallet: string) => {
-    if (!navigator.clipboard) return;
-    try {
-      await navigator.clipboard.writeText(wallet);
-      setCopiedWallet(wallet);
-      setTimeout(() => setCopiedWallet((prev) => (prev === wallet ? null : prev)), 1500);
-    } catch {
-      // No-op: clipboard may be unavailable in some browser/privacy contexts.
-    }
+  useEffect(() => {
+    return () => {
+      if (copyToastTimer.current) clearTimeout(copyToastTimer.current);
+    };
   }, []);
 
+  const showCopyToast = useCallback((message: string) => {
+    if (copyToastTimer.current) clearTimeout(copyToastTimer.current);
+    setCopyToast(message);
+    copyToastTimer.current = setTimeout(() => {
+      setCopyToast(null);
+      copyToastTimer.current = null;
+    }, 2500);
+  }, []);
+
+  const copyWallet = useCallback(
+    async (wallet: string) => {
+      if (!navigator.clipboard?.writeText) {
+        showCopyToast('Копирование недоступно в этом браузере');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(wallet);
+        setCopiedWallet(wallet);
+        setTimeout(() => setCopiedWallet((prev) => (prev === wallet ? null : prev)), 1500);
+        showCopyToast('Адрес скопирован в буфер обмена');
+      } catch {
+        showCopyToast('Не удалось скопировать адрес');
+      }
+    },
+    [showCopyToast],
+  );
+
   return (
+    <>
     <DataTable<Row>
       rows={items}
       rowKey={(r) => r.id}
@@ -162,5 +187,30 @@ export function AdminAuditClient() {
         ) : null
       }
     />
+    {copyToast ? (
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          position: 'fixed',
+          left: '50%',
+          bottom: 24,
+          transform: 'translateX(-50%)',
+          zIndex: 9999,
+          maxWidth: 'min(420px, calc(100vw - 32px))',
+          padding: '10px 16px',
+          borderRadius: 4,
+          border: '1px solid var(--border)',
+          background: 'var(--panel)',
+          color: 'var(--text)',
+          fontSize: 14,
+          lineHeight: 1.35,
+          pointerEvents: 'none',
+        }}
+      >
+        {copyToast}
+      </div>
+    ) : null}
+    </>
   );
 }

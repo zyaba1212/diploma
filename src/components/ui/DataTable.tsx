@@ -58,7 +58,10 @@ export function DataTable<T>({
   footer,
 }: DataTableProps<T>) {
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--panel)' }}>
+    <div
+      className="data-table-wrap"
+      style={{ border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', background: 'var(--panel)' }}
+    >
       <div style={{ maxHeight: 560, overflow: 'auto' }}>
         <table style={tableStyle}>
           <thead>

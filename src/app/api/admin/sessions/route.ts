@@ -4,6 +4,13 @@ import { requireStaff } from '@/lib/admin-guard';
 import { prisma } from '@/lib/prisma';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 
+type SessionsScope = 'all' | 'site' | 'staff';
+
+function parseScope(raw: string | null): SessionsScope {
+  if (raw === 'site' || raw === 'staff') return raw;
+  return 'all';
+}
+
 export async function GET(req: Request) {
   const clientIp = getClientIp(req);
   if (!(await checkRateLimit(`admin.sessions.list:${clientIp}`, 30, 60_000))) {
@@ -17,6 +24,7 @@ export async function GET(req: Request) {
   const pubkeysRaw = url.searchParams.get('pubkeys');
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
+  const scope = parseScope(url.searchParams.get('scope'));
 
   const now = new Date();
   const pubkeys = (pubkeysRaw ?? '')
@@ -24,7 +32,10 @@ export async function GET(req: Request) {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const staffWhere: Record<string, unknown> = { expiresAt: { gt: now } };
+  const hasAnyFilter = pubkeys.length > 0 || Boolean(from) || Boolean(to);
+
+  // Без фильтров показываем только активные staff-сессии; при фильтре по адресу/датам — все подходящие записи.
+  const staffWhere: Record<string, unknown> = hasAnyFilter ? {} : { expiresAt: { gt: now } };
   const userWhere: Record<string, unknown> = {};
 
   if (pubkeys.length) {
@@ -53,22 +64,39 @@ export async function GET(req: Request) {
     userWhere.createdAt = createdAtFilter;
   }
 
-  const staffRows = await prisma.staffSession.findMany({
-    where: staffWhere,
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, role: true, pubkey: true, createdAt: true, expiresAt: true },
-  });
+  const includeStaff = scope !== 'site';
+  const includeUser = scope !== 'staff';
+
+  let staffRows: Array<{
+    id: string;
+    role: string;
+    pubkey: string | null;
+    createdAt: Date;
+    expiresAt: Date;
+  }> = [];
+
+  if (includeStaff) {
+    staffRows = await prisma.staffSession.findMany({
+      where: staffWhere,
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, role: true, pubkey: true, createdAt: true, expiresAt: true },
+    });
+  }
 
   let userRows: Array<{ id: string; pubkey: string; createdAt: Date }> = [];
-  try {
-    userRows = await prisma.userAuthSession.findMany({
-      where: userWhere,
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, pubkey: true, createdAt: true },
-    });
-  } catch (error) {
-    // Не роняем весь список сессий, если таблица/делегат userAuthSession временно недоступны.
-    console.error('admin.sessions.userAuthSession_failed', error);
+  let userSessionsOk = true;
+
+  if (includeUser) {
+    try {
+      userRows = await prisma.userAuthSession.findMany({
+        where: userWhere,
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, pubkey: true, createdAt: true },
+      });
+    } catch (error) {
+      console.error('admin.sessions.userAuthSession_failed', error);
+      userSessionsOk = false;
+    }
   }
 
   const items = [
@@ -90,9 +118,30 @@ export async function GET(req: Request) {
     })),
   ].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
+  const pubkeySet = new Set<string>();
+  for (const row of items) {
+    if (row.pubkey) pubkeySet.add(row.pubkey);
+  }
+  const usernameByPubkey = new Map<string, string | null>();
+  if (pubkeySet.size > 0) {
+    const users = await prisma.user.findMany({
+      where: { pubkey: { in: [...pubkeySet] } },
+      select: { pubkey: true, username: true },
+    });
+    for (const u of users) {
+      usernameByPubkey.set(u.pubkey, u.username);
+    }
+  }
+
+  const itemsWithUser = items.map((row) => ({
+    ...row,
+    username: row.pubkey ? (usernameByPubkey.get(row.pubkey) ?? null) : null,
+  }));
+
   return NextResponse.json(
     {
-      items,
+      items: itemsWithUser,
+      userSessionsOk,
     },
     { headers: { 'cache-control': 'no-store' } },
   );

@@ -2,6 +2,47 @@
 
 Короткие заметки по решениям и граблям, чтобы агенты не повторяли ошибки.
 
+## Референс: офлайн-платежи цифрового рубля в Минске (2026-04-23)
+
+- **Цель:** визуализировать сценарий офлайн-платежа цифрового рубля в Минске (Client A → Merchant POS → mesh → gateway → edge → Core → возврат подтверждения) как закреплённое (`pinned=true`) LOCAL-предложение на `/networks` и `/networks/[id]` (2D/3D).
+- **Скрипт:** [`scripts/seed-digital-ruble-offline-minsk.mjs`](scripts/seed-digital-ruble-offline-minsk.mjs) (также `npm run db:seed-digital-ruble-minsk`) — идемпотентный: ищет Proposal по точному `title`, если принадлежит `SYSTEM_SEED_AUTHOR` — пересоздаёт `ChangeAction` в фиксированном порядке (13 узлов + 17 связей = 30 `CREATE`), синхронизирует `description` (Step 1..Step 9), выставляет `pinned=true`. Чужие предложения не трогает (если title совпал, но `authorPubkey` другой — падает с ошибкой).
+- **Топология (фиксированные координаты, ±0.002 допуск):** Client A (`MODEM`), Merchant POS (`OFFLINE_QUEUE`), Mesh-1..6 (`MESH_RELAY`), Gateway-Primary/Backup (`SWITCH`), Edge Node A/B (`SERVER`), Центральная платформа цифрового рубля / Core (`SERVER`). Линии: mesh (`CABLE_FIBER`), primary uplink (`CABLE_UNDERGROUND_FIBER`), backup uplink (`CABLE_UNDERGROUND_COPPER`), return path (`CABLE_COPPER` с перпендикулярным смещением средней точки на ≈0.0009°, чтобы не сливаться с primary).
+- **Модель безопасности (обязательная терминология):** ключевой материал управляется доверенным контуром платформы (ЦБ/оператор), подписание в защищённой среде (server-side secure contour / HSM / device-bound credential); в `elementPayload` секретов не хранится; до синхронизации — предварительный статус `pending / offline accepted`. Формулировки зашиты в `description` и в `metadata.securityModel` у каждого узла.
+- **Pinned-механика:** `orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }]` в `GET /api/proposals` уже делает закреплённое предложение первым; `scripts/.../seed-digital-ruble-offline-minsk.mjs` пишет `pinned=true` напрямую в `prisma.proposal.update` (тот же столбец, что обновляет админ-PATCH `/api/admin/proposals/[id]`, но без staff-сессии, чтобы быть idempotent без авторизации).
+- **Проверка:** `curl /api/proposals?status=SUBMITTED,ACCEPTED,APPLIED` → первый элемент `pinned:true, scope:"LOCAL"`; `curl /api/proposals/<id>` → `actions.length === 30`, у узлов `type` ∈ {`MODEM`, `OFFLINE_QUEUE`, `MESH_RELAY`, `SWITCH`, `SERVER`}, у связей `type` ∈ {`CABLE_FIBER`, `CABLE_UNDERGROUND_FIBER`, `CABLE_UNDERGROUND_COPPER`, `CABLE_COPPER`} и `metadata.linkKind` ∈ {`mesh`, `primary`, `backup`, `return`}. На `/networks/[id]` `foldProposalActionsForDisplay` разворачивает `CREATE` в 30 элементов, которые рендерят и 3D-фабрики (`EQUIPMENT_FACTORIES`), и 2D-Leaflet ветка.
+- **Повторный запуск:** `node scripts/seed-digital-ruble-offline-minsk.mjs` (или `npm run db:seed-digital-ruble-minsk`).
+
+## SATCAT: `metadata.tle.noradCatId` как число в JSON (2026-04-23)
+
+- **Симптом:** в Celestrak по `CATNR` есть `OWNER` / `LAUNCH_DATE`, а в карточке глобуса строк нет; бэкфилл не обновлял такую строку.
+- **Причина:** `extractNoradCatId` требовал `typeof noradCatId === 'string'`. В `Json` у PostgreSQL NORAD иногда хранится **числом** → спутник отфильтровывался из кандидатов бэкфилла; `GET /api/network/elements/[id]/satcat` отдавал `missing noradCatId`.
+- **Исправление:** приведение `number` / `bigint` к строке в [`scripts/backfill-satellite-satcat-metadata.mjs`](scripts/backfill-satellite-satcat-metadata.mjs) и [`src/app/api/network/elements/[id]/satcat/route.ts`](src/app/api/network/elements/[id]/satcat/route.ts); в [`scripts/sync-satellites-tle-celestrak.mjs`](scripts/sync-satellites-tle-celestrak.mjs) в `tle` пишется нормализованная строка.
+- **После деплоя:** на затронутых БД снова запустить `npm run scripts:backfill-satellite-satcat-metadata` (идемпотентно).
+
+## SATCAT metadata backfill в PostgreSQL (owner / запуск) (2026-04-23)
+
+- **Цель:** заполнить у спутников `SATELLITE` / `SATELLITE_RASSVET` поля `metadata.owner`, `metadata.launchDate` / `metadata.launchYear` из Celestrak SATCAT, чтобы карточка на глобусе показывала их из `GET /api/network` без клиентского догруза (см. [`scripts/backfill-satellite-satcat-metadata.mjs`](scripts/backfill-satellite-satcat-metadata.mjs), [`docs/network-data-and-sources.md`](docs/network-data-and-sources.md)).
+- **Preflight:** `npm run scripts:backfill-satellite-satcat-metadata -- --dry-run --limit 100` — кандидатов 180, в выборке 100: **Updated 86**, **No SATCAT data 14**, Failed 0.
+- **Пробный боевой:** `npm run scripts:backfill-satellite-satcat-metadata -- --limit 300 --batch-size 60 --concurrency 4` — **Updated 166**, No SATCAT data 14, Failed 0 (все 180 кандидатов обработаны).
+- **Полный проход:** `npm run scripts:backfill-satellite-satcat-metadata -- --batch-size 120 --concurrency 6` — оставшиеся 14 строк без записи в SATCAT: **Updated 0**, No SATCAT data 14 (ограничение источника, не баг скрипта).
+- **Пост-проверка:** в БД у `LAGEOS 2` (`noradCatId` 22195) в `metadata` есть `owner: "IT"`, `launchDate: "1992-10-22"`, `launchYear: 1992`, `satcatBackfilledAt`. `npm run lint` — без предупреждений; `npm run test:ux-globe-smoke` — прошёл (localhost:3000).
+- **Инварианты:** контракт `GET /api/network` не менялся; правки только данные в JSON `metadata` у существующих спутников.
+
+## Backbone data authenticity: удалён synthetic `representative_backbone` (2026-04-23)
+
+- **Проблема:** `scripts/sync-global-backbone-cables.mjs` писал 28 жёстко заданных «представительных» магистралей (`Moscow-Europe Link`, `Canada Backbone`, `East Asia Backbone` и т.д.) с `metadata.dataset='representative_backbone'`, `sourceClass='synthetic'`. Карточка ссылалась на общий `en.wikipedia.org/wiki/Internet_backbone`, что для пользователя выглядело как официальный источник, хотя маршруты выдуманы.
+- **Удалено:**
+  - `scripts/sync-global-backbone-cables.mjs` (скрипт целиком);
+  - ветка `SEED_IMPORT_GLOBAL_BACKBONE` в [`prisma/seed.mjs`](prisma/seed.mjs);
+  - функция `isRepresentativeBackboneElement` и обёртка `isEligibleDatasetForNetwork` (упрощена) в [`src/app/api/network/route.ts`](src/app/api/network/route.ts);
+  - ветки `dataset === 'representative_backbone'` в [`src/lib/cableSourceLinks.ts`](src/lib/cableSourceLinks.ts), [`src/components/EarthScene.tsx`](src/components/EarthScene.tsx), [`src/components/MapView.tsx`](src/components/MapView.tsx).
+- **Очистка БД:** `scripts/purge-representative-backbone.mjs` удаляет `NetworkElement.sourceId LIKE 'global-backbone-%'` (30 записей на момент миграции) и `NetworkProvider.id LIKE 'global-backbone-provider-%'` (25 записей). Скрипт идемпотентен, поддерживает `--dry-run`.
+- **Замена:** добавлены два реальных источника (opt-in через env):
+  - `scripts/sync-osm-terrestrial-fibre.mjs` — OSM Overpass (`man_made=cable` + `telecom:medium=fibre`), `metadata.dataset='osm_terrestrial_fibre'`, `sourceClass='osm_verified'`, ссылка в карточке → `openstreetmap.org/way/<id>` (через существующую логику `datasetReferenceLink` при `dataset==='openstreetmap'` + аналогичную ветку для `osm_terrestrial_fibre`);
+  - `scripts/sync-afterfibre.mjs` — AfTerFibre GeoJSON для Африки (CC-BY 4.0), `metadata.dataset='afterfibre'`, `sourceClass='official'`.
+- **Smoke защита:** `scripts/smoke-network-data-extent.mjs` теперь ассертит, что `/api/network?scope=GLOBAL` не содержит элементов с `metadata.dataset='representative_backbone'` или `sourceClass='synthetic'`.
+- **Грабли:** `NetworkProvider.id` и `NetworkElement.sourceId` в БД уникальны глобально — при повторном импорте синтетического слоя конфликтов нет, но после purge обратной совместимости уже не будет, ссылки с префиксом `global-backbone-` удалены безвозвратно.
+
 ## Stage 13: полноценная админ-панель (2026-04-22)
 
 - **Парольный вход в `/admin` удалён** (маршрут `POST /api/admin/login/password`, `src/lib/admin-password.ts`, переменные `ADMIN_USERNAME` / `ADMIN_PASSWORD_SCRYPT` / `ADMIN_SMOKE_PASSWORD`). Админ — только Phantom + `ADMIN_WALLET_PUBKEY`; smoke использует `ADMIN_SMOKE_WALLET_SECRET` (base58 seed/secret, pubkey = `ADMIN_WALLET_PUBKEY`).

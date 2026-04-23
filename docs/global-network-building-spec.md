@@ -75,7 +75,6 @@ Enum:
   - `CABLE_UNDERGROUND_FIBER` — underground fiber
   - `CABLE_UNDERGROUND_COPPER` — underground copper
 - Узлы:
-  - `PROVIDER` — провайдер (узел)
   - `SERVER` — сервер/дата-центр (узел)
   - `SWITCH` — L2/L3-коммутатор (узел)
   - `MULTIPLEXER` — мультиплексор (узел, DWDM-подобное)
@@ -198,7 +197,7 @@ Enum:
   - `segmentCount: number`
 - `importedAt: <ISO>`
 
-#### 3.3.4. Узлы (`PROVIDER/SERVER/...`)
+#### 3.3.4. Узлы (`SERVER/...`)
 
 Текущий `scripts/sync-satellites.mjs` оставляет пока минимальную metadata для спутника:
 
@@ -400,7 +399,6 @@ Query params:
 
 В текущей логике узлы маппятся на визуальные параметры (из `nodeVisuals`):
 
-- `PROVIDER`: size `0.022`, color `0x7aa2ff`, emissive `0x103060`
 - `SERVER`: size `0.018`, color `0x3ddc97`, emissive `0x0f4a2e`
 - `SWITCH`: size `0.014`, color `0xf6c177`, emissive `0x3b2b10`
 - `MULTIPLEXER`: size `0.012`, color `0xe6a7ff`, emissive `0x3a1456`
@@ -532,7 +530,7 @@ UI поведение:
 - `SATELLITE`:
   - цвет: `#9fe7ff`
   - radius: `3`
-- остальные узлы (`PROVIDER/SERVER/SWITCH/.../EQUIPMENT`):
+- остальные узлы (`SERVER/SWITCH/.../EQUIPMENT`):
   - цвет: взять из визуального mapping 3D (или упрощённо единым цветом, если пока нет полной палитры)
   - базовый radius: `4`
 
@@ -669,7 +667,6 @@ UI поведение:
 
 Рекомендуемая легенда для 2D (если расширить отрисовку до полной палитры):
 
-- `PROVIDER` — color `#7aa2ff`
 - `SERVER` — color `#3ddc97`
 - `SWITCH` — color `#f6c177`
 - `MULTIPLEXER` — color `#e6a7ff`

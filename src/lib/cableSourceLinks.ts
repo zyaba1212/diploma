@@ -31,6 +31,16 @@ export function isSubmarineCableElementType(elType: string): boolean {
   return elType === 'CABLE_FIBER' || elType === 'CABLE_COPPER';
 }
 
+function isSatelliteElementType(elType: string): boolean {
+  return elType === 'SATELLITE' || elType === 'SATELLITE_RASSVET';
+}
+
+export function buildCelestrakNameSearchUrl(name: string): string | null {
+  const normalized = name.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  return `https://celestrak.org/satcat/records.php?NAME=${encodeURIComponent(normalized)}&ONORBIT=1`;
+}
+
 /**
  * Убираем служебный сегментный суффикс, который добавляется при импорте
  * MultiLineString-геометрий: "Equiano (6/6)" -> "Equiano".
@@ -62,6 +72,14 @@ export function urlDomain(url: string): string {
   }
 }
 
+function sameHttpUrl(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return a.trim() === b.trim();
+  }
+}
+
 function firstSafeHttpUrl(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -89,7 +107,18 @@ function metadataObject(metadata: unknown): Record<string, unknown> | null {
   return metadata as Record<string, unknown>;
 }
 
-function datasetReferenceLink(elType: string, metadata: unknown): CableSourceLink | null {
+function isCelestrakSatelliteCard(elType: string, metadata: unknown): boolean {
+  if (!isSatelliteElementType(elType)) return false;
+  const meta = metadataObject(metadata);
+  return meta?.dataset === 'celestrak-tle';
+}
+
+function datasetReferenceLink(
+  elType: string,
+  metadata: unknown,
+  satelliteNameQuery?: string | null,
+  satelliteElementName?: string | null,
+): CableSourceLink | null {
   const meta = metadataObject(metadata);
   if (!meta) return null;
 
@@ -105,11 +134,18 @@ function datasetReferenceLink(elType: string, metadata: unknown): CableSourceLin
   }
 
   const dataset = typeof meta.dataset === 'string' ? meta.dataset : '';
-  if (dataset === 'openstreetmap') {
+  if (dataset === 'openstreetmap' || dataset === 'osm_terrestrial_fibre') {
     const osm = meta.osm && typeof meta.osm === 'object' ? (meta.osm as Record<string, unknown>) : null;
-    const osmId = typeof osm?.id === 'number' || typeof osm?.id === 'string' ? String(osm.id).trim() : '';
+    const rawId = osm?.id ?? osm?.wayId ?? osm?.nodeId ?? osm?.relationId;
+    const osmId = typeof rawId === 'number' || typeof rawId === 'string' ? String(rawId).trim() : '';
     const osmTypeRaw = typeof osm?.type === 'string' ? osm.type.trim().toLowerCase() : '';
-    const osmType = osmTypeRaw === 'node' || osmTypeRaw === 'way' || osmTypeRaw === 'relation' ? osmTypeRaw : '';
+    let osmType: 'node' | 'way' | 'relation' | '' =
+      osmTypeRaw === 'node' || osmTypeRaw === 'way' || osmTypeRaw === 'relation' ? osmTypeRaw : '';
+    if (!osmType) {
+      if (osm?.wayId != null) osmType = 'way';
+      else if (osm?.nodeId != null) osmType = 'node';
+      else if (osm?.relationId != null) osmType = 'relation';
+    }
     if (osmId && osmType) {
       const href = `https://www.openstreetmap.org/${osmType}/${encodeURIComponent(osmId)}`;
       return {
@@ -118,6 +154,16 @@ function datasetReferenceLink(elType: string, metadata: unknown): CableSourceLin
         domain: urlDomain(href),
       };
     }
+  }
+
+  if (dataset === 'afterfibre') {
+    const href = 'https://afterfibre.nsrc.org/';
+    return {
+      href,
+      label: 'AfTerFibre (African terrestrial fibre)',
+      domain: urlDomain(href),
+      note: 'Данные CC-BY 4.0 AfTerFibre / NSRC; точная геометрия может отличаться.',
+    };
   }
 
   if (dataset === 'gold_coast_fibre_optic_cable') {
@@ -130,7 +176,11 @@ function datasetReferenceLink(elType: string, metadata: unknown): CableSourceLin
   }
 
   if (dataset === 'celestrak-tle') {
-    const href = 'https://celestrak.org/NORAD/elements/';
+    const satelliteNameForSearch = satelliteNameQuery ?? satelliteElementName ?? '';
+    const href =
+      isSatelliteElementType(elType) && satelliteNameForSearch
+        ? (buildCelestrakNameSearchUrl(satelliteNameForSearch) ?? 'https://celestrak.org/NORAD/elements/')
+        : 'https://celestrak.org/NORAD/elements/';
     return {
       href,
       label: 'Каталог орбитальных данных (Celestrak)',
@@ -147,8 +197,9 @@ export function cableSourceLinks(params: {
   metadata?: unknown;
   elementSourceUrl?: string | null;
   providerSourceUrl?: string | null;
+  satelliteNameQuery?: string | null;
 }): CableSourceLink[] {
-  const { elType, cableName, metadata, elementSourceUrl, providerSourceUrl } = params;
+  const { elType, cableName, metadata, elementSourceUrl, providerSourceUrl, satelliteNameQuery } = params;
   const links: CableSourceLink[] = [];
   const seen = new Set<string>();
   const pushUnique = (link: CableSourceLink) => {
@@ -168,6 +219,7 @@ export function cableSourceLinks(params: {
   const providerSource = firstSafeHttpUrl(providerSourceUrl);
   const isServer = elType === 'SERVER';
   const isSubmarine = isSubmarineCableElementType(elType);
+  const isCelestrakSatellite = isCelestrakSatelliteCard(elType, meta);
 
   if (isServer && elementSource) {
     pushUnique({
@@ -177,7 +229,7 @@ export function cableSourceLinks(params: {
     });
   }
 
-  if (official) {
+  if (official && !(isServer && elementSource && sameHttpUrl(official, elementSource))) {
     pushUnique({
       href: official,
       label: 'Сайт проекта / оператора',
@@ -187,7 +239,12 @@ export function cableSourceLinks(params: {
   }
 
   // For server cards, provider-level URL is only a final fallback.
-  if (providerSource && (!isServer || (!elementSource && !official))) {
+  if (
+    providerSource &&
+    (!isServer || (!elementSource && !official)) &&
+    !isCelestrakSatellite &&
+    meta?.dataset !== 'afterfibre'
+  ) {
     pushUnique({
       href: providerSource,
       label: 'Источник провайдера',
@@ -195,8 +252,18 @@ export function cableSourceLinks(params: {
     });
   }
 
-  const datasetRef = datasetReferenceLink(elType, meta);
+  const datasetRef = datasetReferenceLink(elType, meta, satelliteNameQuery, cableName);
   if (datasetRef) pushUnique(datasetRef);
+  if (isCelestrakSatellite) {
+    const noradElementsHref = 'https://celestrak.org/NORAD/elements/';
+    if (datasetRef?.href !== noradElementsHref) {
+      pushUnique({
+        href: noradElementsHref,
+        label: 'Раздел TLE (NORAD elements)',
+        domain: urlDomain(noradElementsHref),
+      });
+    }
+  }
 
   if (isSubmarine && cableName?.trim()) {
     const wiki = wikipediaSearchUrlEn(cableName);

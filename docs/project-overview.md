@@ -126,7 +126,7 @@ diploma/
 - `ProposalStatus` — `DRAFT | SUBMITTED | ACCEPTED | REJECTED | APPLIED | CANCELLED`.
 - `ChangeActionType` — `CREATE | UPDATE | DELETE`.
 - `VoteType` — `FOR | AGAINST`.
-- `NetworkElementType` — кабели (`CABLE_COPPER`, `CABLE_FIBER`, `CABLE_UNDERGROUND_COPPER`, `CABLE_UNDERGROUND_FIBER`), узлы (`PROVIDER`, `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`), `BASE_STATION`, `SATELLITE`, `SATELLITE_RASSVET`, `EQUIPMENT`, + **offline-transaction-specific**: `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE`.
+- `NetworkElementType` — кабели (`CABLE_COPPER`, `CABLE_FIBER`, `CABLE_UNDERGROUND_COPPER`, `CABLE_UNDERGROUND_FIBER`), узлы (`SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`), `BASE_STATION`, `SATELLITE`, `SATELLITE_RASSVET`, `EQUIPMENT`, + **offline-transaction-specific**: `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE`.
 
 ### Модели
 
@@ -284,10 +284,68 @@ diploma/
 
 ### Импорт данных
 
-- Кабели: `sync-submarine-cables.mjs`, `sync-underground-cables.mjs`, `sync-underground-copper-cables-osm.mjs`, `sync-global-backbone-cables.mjs`.
+- Кабели: `sync-submarine-cables.mjs` (Open Undersea Cable Map), `sync-underground-cables.mjs` (data.gov.au Gold Coast, CC-BY 3.0 AU), `sync-underground-copper-cables-osm.mjs` (Overpass, ODbL), `sync-osm-terrestrial-fibre.mjs` (Overpass `man_made=cable`+`telecom:medium=fibre`, ODbL; opt-in через `SEED_IMPORT_OSM_TERRESTRIAL_FIBRE=1`), `sync-afterfibre.mjs` (AfTerFibre terrestrial fibre для Африки, CC-BY 4.0; opt-in через `SEED_IMPORT_AFTERFIBRE=1`).
 - Узлы/инфраструктура: `sync-base-stations-osm.mjs`, `sync-major-datacenters.mjs`, `sync-derived-nodes-from-cables.mjs`.
 - Спутники: `sync-satellites-tle-celestrak.mjs`, `sync-satellites.mjs`.
 - Новости: `sync-news.mjs`, `sync-news-db.ts`.
+- Maintenance: `purge-representative-backbone.mjs` — одноразовая очистка устаревшего синтетического слоя backbone-маршрутов (см. [DEVELOPMENT_JOURNAL.md](../DEVELOPMENT_JOURNAL.md)).
+
+#### Источники данных и лицензии (terrestrial/underground fibre)
+
+| Dataset (`metadata.dataset`) | `sourceClass` | Источник | Лицензия |
+|---|---|---|---|
+| `open_undersea_cable_map` | `official` | [Open Undersea Cable Map](https://github.com/stevesong/open_undersea_cable_map) | CC-BY-SA 4.0 |
+| `gold_coast_fibre_optic_cable` | `official` | [data.gov.au — Fibre Optic Cable](https://data.gov.au/data/dataset/fibre-optic-cable) | CC-BY 3.0 AU |
+| `openstreetmap` (copper) | `osm_verified` | [OSM Overpass](https://www.openstreetmap.org/) | ODbL 1.0 |
+| `osm_terrestrial_fibre` | `osm_verified` | [OSM Overpass](https://www.openstreetmap.org/) (`man_made=cable` + `telecom:medium=fibre`) | ODbL 1.0 |
+| `afterfibre` | `official` | [AfTerFibre](https://afterfibre.nsrc.org/) | CC-BY 4.0 |
+
+Синтетический слой `representative_backbone` удалён из проекта (см. `DEVELOPMENT_JOURNAL.md`). Если в БД встречаются записи с таким `metadata.dataset` — использовать `purge-representative-backbone.mjs`.
+
+#### Global terrestrial import (без synthetic)
+
+- OSM terrestrial fibre:
+  - `SEED_IMPORT_OSM_TERRESTRIAL_FIBRE=1`
+  - `SEED_OSM_TERRESTRIAL_FIBRE_REGIONS=EU,RU,NA,LATAM,APAC,AFRICA,OCEANIA`
+  - `SEED_OSM_TERRESTRIAL_FIBRE_LIMIT=120` (лимит `way` на каждый чанк bbox)
+- AfTerFibre:
+  - `SEED_IMPORT_AFTERFIBRE=1`
+  - `SEED_AFTERFIBRE_FILE=<path-to-geojson>` **или** `SEED_AFTERFIBRE_URL=<geojson-url>`
+
+Пример запуска сидов с global-terrestrial:
+
+```bash
+SEED_SCOPE=GLOBAL \
+SEED_IMPORT_OSM_TERRESTRIAL_FIBRE=1 \
+SEED_OSM_TERRESTRIAL_FIBRE_REGIONS=EU,RU,NA,LATAM,APAC,AFRICA,OCEANIA \
+SEED_OSM_TERRESTRIAL_FIBRE_LIMIT=120 \
+SEED_IMPORT_AFTERFIBRE=1 \
+SEED_AFTERFIBRE_URL="https://raw.githubusercontent.com/stevesong/afterfibre-kml/master/Cameroon/Camtel.geojson" \
+npm run db:seed
+```
+
+Безопасные лимиты для Overpass:
+
+- Рекомендуемый диапазон: `SEED_OSM_TERRESTRIAL_FIBRE_LIMIT=60..150` (выше — больше риск 429/504).
+- Для полного мира запускать последовательно (один процесс), не параллелить несколько импортов OSM.
+- При частых 429/504 использовать альтернативный endpoint через `OVERPASS_URL`.
+
+#### Main underground mode and scoring
+
+- API режим: `GET /api/network?...&mainUndergroundOnly=1` (также поддерживаются `true|yes|on`).
+- UI режим: toggle `only main underground` в панели «Данные» на `/global-network`.
+- Поведение:
+  - при `mainUndergroundOnly=1` сервер оставляет только underground-элементы с `metadata.isMainUnderground === true`;
+  - остальные типы элементов (`SATELLITE`, `SERVER`, submarine и т.д.) остаются в ответе без изменений;
+  - обычный режим (`mainUndergroundOnly=0`) работает как раньше.
+- Скрипты импорта теперь динамически считают `metadata.rank` и `metadata.isMainUnderground`:
+  - `sync-osm-terrestrial-fibre.mjs`: теги `name/ref/operator/network/usage/location/communication/cable/telecom:medium` + длина `path`;
+  - `sync-afterfibre.mjs`: `operator/country/status` + длина `path`;
+  - `sync-underground-cables.mjs`: атрибуты фичи (`Folder/open/visibility`), число сегментов и длина `path`.
+- Как пересчитать магистральность после обновления правил:
+  1) запустить соответствующие `sync-*` скрипты повторно (upsert по `sourceId` обновит metadata);
+  2) прогнать `scripts/smoke-network-data-extent.mjs` и проверить worldish + `mainUndergroundOnly=1`;
+  3) визуально проверить `/global-network`, что toggle уменьшает число underground-линий и оставляет более крупные трассы.
 
 ### Smoke / test
 

@@ -158,17 +158,9 @@ export default function NetworksPage() {
       style={{ minHeight: '100vh', background: 'var(--bg)', padding: '72px 24px 40px' }}
     >
       <div className="networks-page-inner" style={{ maxWidth: 900, margin: '0 auto' }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>
-          Предложенные сети
+        <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginBottom: 24 }}>
+          ПРЕДЛОЖЕННАЯ СЕТЬ
         </h1>
-        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 12 }}>
-          Предложения пользователей по построению устойчивой сетевой инфраструктуры.
-          Голосуйте за лучшие решения! Референсная топология по Республике Беларусь закреплена вверху списка.
-        </p>
-        <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 28, lineHeight: 1.5 }}>
-          На этой странице только статусы на голосовании, принятые и применённые (SUBMITTED / ACCEPTED / APPLIED).
-          Черновики и отклонённые не показываются здесь, но остаются в базе — их список в личном кабинете; удалить безвозвратно можно в кабинете или на странице предложения (подпись кошельком).
-        </p>
 
         {loading && <p style={{ color: 'var(--muted)' }}>Загрузка…</p>}
         {error && <p style={{ color: 'var(--danger, #ff6b6b)' }}>Ошибка: {error}</p>}
@@ -187,7 +179,7 @@ export default function NetworksPage() {
                 style={{
                   background: isSelected ? 'rgba(120,160,255,0.08)' : 'rgba(255,255,255,0.03)',
                   border: `1px solid ${isSelected ? 'rgba(120,160,255,0.3)' : 'rgba(232,236,255,0.10)'}`,
-                  borderRadius: 12,
+                  borderRadius: 4,
                   padding: '18px 22px',
                   cursor: 'pointer',
                   transition: 'all 0.2s',
@@ -229,12 +221,6 @@ export default function NetworksPage() {
                     <span style={{ fontSize: 11, color: '#f6c177', whiteSpace: 'nowrap' }}>{remaining}</span>
                   )}
                 </div>
-
-                {p.description && (
-                  <p style={{ fontSize: 13, color: 'rgba(200,220,255,0.7)', margin: '10px 0 0', lineHeight: 1.5 }}>
-                    {p.description.length > 200 ? p.description.slice(0, 200) + '…' : p.description}
-                  </p>
-                )}
 
                 {/* Vote bar */}
                 {tally && (

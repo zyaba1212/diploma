@@ -32,7 +32,6 @@ export function Modal({
     position: 'fixed',
     inset: 0,
     background: 'rgba(0,0,0,0.55)',
-    backdropFilter: 'blur(4px)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -47,9 +46,8 @@ export function Modal({
     overflow: 'auto',
     background: 'var(--bg)',
     border: '1px solid var(--border)',
-    borderRadius: 14,
+    borderRadius: 4,
     padding: 16,
-    boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
   };
 
   return (

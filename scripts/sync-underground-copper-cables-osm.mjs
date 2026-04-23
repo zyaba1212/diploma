@@ -18,6 +18,8 @@ const BASE_PROVIDER_ID = "osm-underground-telecom-cables-copper";
 const PROVIDER_NAME = "OpenStreetMap — Underground telecom cables (copper)";
 const PROVIDER_SOURCE_URL = "https://www.openstreetmap.org/";
 const PROVIDER_LICENSE_NOTE = "OpenStreetMap data © contributors, ODbL 1.0 — include attribution (per ODbL).";
+const OSM_DATASET = "openstreetmap";
+const OSM_SOURCE_CLASS = "osm_verified";
 
 const FIBER_FALLBACK_PROVIDER_SOURCE_URL = "https://data.gov.au/data/dataset/fibre-optic-cable";
 const FIBER_FALLBACK_PROVIDER_LICENSE_NOTE =
@@ -202,7 +204,8 @@ async function main() {
         name,
         path,
         metadata: {
-          dataset: "openstreetmap",
+          dataset: OSM_DATASET,
+          sourceClass: OSM_SOURCE_CLASS,
           licenseNote: PROVIDER_LICENSE_NOTE,
           transportMode: "underground",
           underground: true,
@@ -221,7 +224,8 @@ async function main() {
         providerId,
         path,
         metadata: {
-          dataset: "openstreetmap",
+          dataset: OSM_DATASET,
+          sourceClass: OSM_SOURCE_CLASS,
           licenseNote: PROVIDER_LICENSE_NOTE,
           transportMode: "underground",
           underground: true,
@@ -274,6 +278,7 @@ async function main() {
           path: fiber.path,
           metadata: {
             dataset: "fallback-reclassified-from-underground-fiber",
+            sourceClass: OSM_SOURCE_CLASS,
             licenseNote: FIBER_FALLBACK_PROVIDER_LICENSE_NOTE,
             transportMode: "underground",
             underground: true,
@@ -293,6 +298,7 @@ async function main() {
           providerId,
           metadata: {
             dataset: "fallback-reclassified-from-underground-fiber",
+            sourceClass: OSM_SOURCE_CLASS,
             licenseNote: FIBER_FALLBACK_PROVIDER_LICENSE_NOTE,
             transportMode: "underground",
             underground: true,

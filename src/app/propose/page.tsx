@@ -189,7 +189,7 @@ function ProposePageContent() {
 
   // Выбор из ?open=… или последнее предложение из списка.
   useEffect(() => {
-    const open = searchParams.get('open');
+    const open = searchParams?.get('open');
     if (open) {
       setSelectedProposalId(open);
       return;
@@ -702,7 +702,7 @@ function ProposePageContent() {
                         <span
                           style={{
                             padding: '2px 6px',
-                            borderRadius: 999,
+                            borderRadius: 4,
                             border: '1px solid var(--border)',
                             fontSize: 11,
                             textTransform: 'uppercase',

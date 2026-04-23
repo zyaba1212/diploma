@@ -16,12 +16,13 @@ import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality
 import { disposeEarthTextures, loadEarthTextures } from '@/lib/loadEarthTextures';
 import { Button } from '@/components/ui/Button';
 import { Panel } from '@/components/ui/Panel';
+import { colors } from '@/theme/colors';
 
 import type L from 'leaflet';
 
 type ElementType =
   | 'SERVER' | 'SWITCH' | 'MULTIPLEXER' | 'DEMULTIPLEXER' | 'BASE_STATION'
-  | 'REGENERATOR' | 'PROVIDER' | 'SATELLITE' | 'SATELLITE_RASSVET' | 'MESH_RELAY' | 'SMS_GATEWAY'
+  | 'REGENERATOR' | 'SATELLITE' | 'SATELLITE_RASSVET' | 'MESH_RELAY' | 'SMS_GATEWAY'
   | 'VSAT_TERMINAL'
   | 'CABLE_UNDERGROUND_FIBER' | 'CABLE_UNDERGROUND_COPPER' | 'CABLE_FIBER' | 'CABLE_COPPER';
 
@@ -54,7 +55,6 @@ const ELEMENT_TYPES: { category: string; types: { type: ElementType; label: stri
       { type: 'DEMULTIPLEXER', label: 'Демультиплексор', color: '#b36cff' },
       { type: 'BASE_STATION', label: 'Базовая станция', color: '#ffc3a0' },
       { type: 'REGENERATOR', label: 'Регенератор', color: '#7df1ff' },
-      { type: 'PROVIDER', label: 'Провайдер', color: '#7aa2ff' },
     ],
   },
   {
@@ -174,6 +174,7 @@ export default function SandboxPage() {
     if (viewMode !== 'MAP_2D' || !mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
     let cancelled = false;
+    const leafletLayers = leafletLayersRef.current;
 
     (async () => {
       const L = (await import('leaflet')).default;
@@ -276,13 +277,13 @@ export default function SandboxPage() {
     return () => {
       cancelled = true;
       setMapReady(false);
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+      const map = mapInstanceRef.current;
+      if (map) {
+        map.remove();
         mapInstanceRef.current = null;
       }
-      leafletLayersRef.current.clear();
+      leafletLayers.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
 
   function findClosestNode(els: SandboxElement[], lat: number, lng: number, excludeId: string): SandboxElement | null {
@@ -718,7 +719,7 @@ export default function SandboxPage() {
           width: 280px;
           flex-shrink: 0;
           padding: 60px 12px 12px;
-          border-right: 1px solid rgba(232,236,255,0.10);
+          border-right: 1px solid var(--border);
           overflow-y: auto;
           background: var(--bg);
         }
@@ -743,8 +744,6 @@ export default function SandboxPage() {
             width: 280px;
             z-index: 500;
             transform: translateX(-100%);
-            transition: transform 0.2s ease;
-            box-shadow: 4px 0 24px rgba(0,0,0,0.35);
           }
           .sandbox-sidebar.sandbox-sidebar--open {
             transform: translateX(0);
@@ -775,14 +774,13 @@ export default function SandboxPage() {
             z-index: 600;
             width: 44px;
             height: 44px;
-            border-radius: 12px;
-            border: 1px solid rgba(232,236,255,0.15);
-            background: rgba(10,20,40,0.92);
-            color: #fff;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            color: var(--text);
             font-size: 20px;
             line-height: 1;
             cursor: pointer;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.35);
           }
         }
         @media (min-width: 768px) {
@@ -1020,16 +1018,15 @@ export default function SandboxPage() {
                   style={{
                     width: 36,
                     height: 36,
-                    borderRadius: 8,
-                    border: '1px solid var(--border)',
-                    background: 'rgba(0,0,0,0.45)',
-                    color: 'var(--text)',
+                    borderRadius: 4,
+                    border: `1px solid ${colors.border}`,
+                    background: colors.bg.card,
+                    color: colors.text.primary,
                     fontSize: 16,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    backdropFilter: 'blur(6px)',
                   }}
                 >
                   {dir.label}
@@ -1042,7 +1039,7 @@ export default function SandboxPage() {
         )}
 
         {selectedType && (
-          <div style={{ position: 'absolute', top: 62, left: '50%', transform: 'translateX(-50%)', background: 'rgba(10,20,40,0.9)', borderRadius: 8, padding: '6px 14px', fontSize: 12, color: '#ffcc00', zIndex: 1000, pointerEvents: 'none' }}>
+          <div style={{ position: 'absolute', top: 62, left: '50%', transform: 'translateX(-50%)', background: colors.bg.card, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 14px', fontSize: 12, color: colors.accent, zIndex: 1000, pointerEvents: 'none' }}>
             Размещение: {ELEMENT_TYPES.flatMap(c => c.types).find(t => t.type === selectedType)?.label ?? selectedType}
             {isCable(selectedType) ? ' (кликните на узлы)' : ' (клик на карту/глобус)'}
           </div>
@@ -1053,18 +1050,18 @@ export default function SandboxPage() {
       {/* Save modal */}
       {showSaveModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }} onClick={() => setShowSaveModal(false)}>
-          <div style={{ background: 'var(--bg, #0b1020)', border: '1px solid rgba(232,236,255,0.15)', borderRadius: 14, padding: '28px 32px', maxWidth: 440, width: '90%' }} onClick={e => e.stopPropagation()}>
+          <div style={{ background: colors.bg.card, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '28px 32px', maxWidth: 440, width: '90%' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 16 }}>Сохранить предложение</h3>
             <div style={{ marginBottom: 12 }}>
               <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Название</label>
               <input value={proposalTitle} onChange={e => setProposalTitle(e.target.value)} placeholder="Устойчивая сеть для Мозырского района"
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(232,236,255,0.15)', background: 'rgba(255,255,255,0.04)', color: 'var(--text)', fontSize: 14, outline: 'none' }}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.bg.primary, color: colors.text.primary, fontSize: 14, outline: 'none' }}
               />
             </div>
             <div style={{ marginBottom: 16 }}>
               <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Описание</label>
               <textarea value={proposalDesc} onChange={e => setProposalDesc(e.target.value)} placeholder="Опишите архитектуру..." rows={3}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(232,236,255,0.15)', background: 'rgba(255,255,255,0.04)', color: 'var(--text)', fontSize: 14, outline: 'none', resize: 'vertical' }}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: 4, border: `1px solid ${colors.border}`, background: colors.bg.primary, color: colors.text.primary, fontSize: 14, outline: 'none', resize: 'vertical' }}
               />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>

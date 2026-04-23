@@ -31,7 +31,6 @@ enum NetworkElementType {
   CABLE_COPPER
   CABLE_FIBER
 
-  PROVIDER
   SERVER
   SWITCH
   MULTIPLEXER

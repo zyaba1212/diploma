@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { CopyButton } from '@/components/ui/CopyButton';
 import { DataTable } from '@/components/ui/DataTable';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -208,7 +207,6 @@ export function AdminUsersClient({ canGrantModerator = false }: { canGrantModera
         footer={
           selected ? (
             <>
-              <CopyButton value={selected.pubkey} label="Копировать pubkey" />
               {canGrantModerator ? (
                 <Button type="button" onClick={() => setConfirmModerator(true)}>
                   {selected.isModerator ? 'Снять модератора' : 'Назначить модератором'}

@@ -14,13 +14,16 @@ const nextConfig = {
    * Сужаем watch + отключаем followSymlinks. При повторяющихся ошибках см. docs/windows-dev.md
    */
   webpack: (config, { dev }) => {
-    if (dev) {
-      /**
-       * Windows / антивирус: filesystem cache webpack (`PackFileCacheStrategy`) даёт ENOENT на
-       * `.next/cache/webpack/**.pack.gz` и рассинхрон runtime ↔ чанки (`Cannot find module './NNNN.js'`).
-       * In-memory cache в dev убирает дисковый pack без полного отключения кэширования.
-       */
+    /**
+     * Windows / антивирус: filesystem cache webpack (`PackFileCacheStrategy`) даёт ENOENT на
+     * `.next/cache/webpack/**.pack.gz` и рассинхрон runtime ↔ чанки (`Cannot find module './NNNN.js'`,
+     * в рантайме — `Cannot read properties of undefined (reading 'call')` в __webpack_exec__).
+     * In-memory cache убирает дисковый pack. В dev — всегда; в production — только на win32 (CI/Linux без изменений).
+     */
+    if (dev || process.platform === 'win32') {
       config.cache = { type: 'memory' };
+    }
+    if (dev) {
       config.watchOptions = {
         ...config.watchOptions,
         aggregateTimeout: 600,

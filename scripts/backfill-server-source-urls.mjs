@@ -7,46 +7,29 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import {
+  isOperatorGenericLandingUrl,
+  isSafeExternalHttpUrlNormalized,
+  isWikipediaLikeUrl,
+  resolveServerSourceUrl,
+} from './lib/resolve-server-source-url.mjs';
 
 const prisma = new PrismaClient();
 const DRY_RUN = process.argv.includes('--dry-run');
 const LEGACY_GENERIC_IXP_URL = 'https://en.wikipedia.org/wiki/Internet_exchange_point';
-const WIKIPEDIA_SEARCH_PREFIX = 'https://en.wikipedia.org/w/index.php?title=Special:Search&search=';
 
-function wikipediaSearchUrl(query) {
-  const q = String(query || '').trim();
-  if (!q) return null;
-  return `${WIKIPEDIA_SEARCH_PREFIX}${encodeURIComponent(q)}`;
+function qualityScore(url) {
+  if (!url || !isSafeExternalHttpUrlNormalized(url)) return 0;
+  if (url === LEGACY_GENERIC_IXP_URL) return 0;
+  if (isOperatorGenericLandingUrl(url)) return 1;
+  if (isWikipediaLikeUrl(url)) return 2;
+  return 3;
 }
 
-function awsRegionSourceUrl(name) {
-  const m = String(name).match(/\b([a-z]{2}-[a-z]+-\d)\b/i);
-  if (!m) return null;
-  const region = m[1].toLowerCase();
-  return `https://aws.amazon.com/about-aws/global-infrastructure/regions_az/${encodeURIComponent(region)}/`;
-}
-
-function metadataSourceUrl(metadata) {
-  if (!metadata || typeof metadata !== 'object') return null;
-  const m = metadata;
-  const candidates = [m.officialUrl, m.projectUrl, m.url];
-  for (const value of candidates) {
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return null;
-}
-
-function resolveServerSourceUrl(el) {
-  const awsRegion = awsRegionSourceUrl(el.name ?? '');
-  if (awsRegion) return awsRegion;
-
-  const fromMetadata = metadataSourceUrl(el.metadata);
-  if (fromMetadata) return fromMetadata;
-
-  const byName = wikipediaSearchUrl(el.name);
-  if (byName) return byName;
-
-  return null;
+function metadataOperator(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const op = metadata.operator;
+  return typeof op === 'string' && op.trim() ? op.trim() : null;
 }
 
 async function main() {
@@ -64,15 +47,24 @@ async function main() {
   let touched = 0;
   for (const el of servers) {
     const current = typeof el.sourceUrl === 'string' ? el.sourceUrl.trim() : '';
-    const shouldReplaceCurrent = !current || current === LEGACY_GENERIC_IXP_URL;
-    if (!shouldReplaceCurrent) continue;
-
-    const nextUrl = resolveServerSourceUrl(el);
+    const rawMeta = el.metadata;
+    const country =
+      rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta) && typeof rawMeta.country === 'string'
+        ? rawMeta.country
+        : undefined;
+    const nextUrl = resolveServerSourceUrl({
+      name: el.name,
+      operator: metadataOperator(el.metadata),
+      metadata: el.metadata,
+      country,
+    });
     if (!nextUrl) continue;
+    const shouldReplaceCurrent = qualityScore(nextUrl) > qualityScore(current);
+    if (!shouldReplaceCurrent) continue;
 
     touched += 1;
     if (DRY_RUN) {
-      console.log(`[DRY RUN] ${el.id} :: ${el.name ?? '(no name)'} -> ${nextUrl}`);
+      console.log(`[DRY RUN] ${el.id} :: ${el.name ?? '(no name)'} :: ${current || '(empty)'} -> ${nextUrl}`);
       continue;
     }
 
