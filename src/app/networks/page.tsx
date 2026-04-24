@@ -159,7 +159,7 @@ export default function NetworksPage() {
     >
       <div className="networks-page-inner" style={{ maxWidth: 900, margin: '0 auto' }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginBottom: 24 }}>
-          ПРЕДЛОЖЕННАЯ СЕТЬ
+          Предложенные сети
         </h1>
 
         {loading && <p style={{ color: 'var(--muted)' }}>Загрузка…</p>}
@@ -221,6 +221,12 @@ export default function NetworksPage() {
                     <span style={{ fontSize: 11, color: '#f6c177', whiteSpace: 'nowrap' }}>{remaining}</span>
                   )}
                 </div>
+
+                {p.description && (
+                  <p style={{ fontSize: 13, color: 'rgba(200,220,255,0.7)', margin: '10px 0 0', lineHeight: 1.5 }}>
+                    {p.description.length > 200 ? p.description.slice(0, 200) + '…' : p.description}
+                  </p>
+                )}
 
                 {/* Vote bar */}
                 {tally && (

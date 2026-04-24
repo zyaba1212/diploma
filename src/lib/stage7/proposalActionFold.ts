@@ -34,7 +34,7 @@ function snapshotFromCreatePayload(payload: Record<string, unknown>): ProposalDi
   if (typeof payload.lng === 'number' && Number.isFinite(payload.lng)) el.lng = payload.lng;
   if (typeof payload.altitude === 'number' && Number.isFinite(payload.altitude)) el.altitude = payload.altitude;
   if (Array.isArray(payload.path)) el.path = payload.path;
-  if (isPlainObject(payload.metadata)) el.metadata = { ...payload.metadata };
+  if (typeof payload.metadata !== 'undefined') el.metadata = payload.metadata;
   return el;
 }
 
@@ -91,7 +91,7 @@ export function foldProposalActionsForDisplay(actions: ProposalActionFoldInput[]
       }
       if (typeof patch.metadata !== 'undefined') {
         if (patch.metadata === null) delete next.metadata;
-        else if (isPlainObject(patch.metadata)) next.metadata = { ...patch.metadata };
+        else next.metadata = patch.metadata;
       }
       byKey.set(key, next);
       continue;

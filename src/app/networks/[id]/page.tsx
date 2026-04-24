@@ -730,6 +730,12 @@ export default function ProposalViewPage() {
               <span style={{ color: statusColor }}>{proposal.status}</span>
             </div>
 
+            {proposal.description && (
+              <p style={{ fontSize: 13, color: colors.text.secondary, lineHeight: 1.5, marginBottom: 10 }}>
+                {proposal.description}
+              </p>
+            )}
+
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
               Узлов: {nodeCount} · Кабелей: {cableCount}
             </div>
