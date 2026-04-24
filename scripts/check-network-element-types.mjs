@@ -1,3 +1,5 @@
+// check-network-element-types — CLI-скрипт (данные, синхронизация или проверка).
+
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -7,7 +9,6 @@ const scope = (process.argv[2] ?? "GLOBAL").toUpperCase();
 const types = [
   "CABLE_UNDERGROUND_COPPER",
   "CABLE_UNDERGROUND_FIBER",
-  "PROVIDER",
   "SERVER",
   "SATELLITE",
   "BASE_STATION",

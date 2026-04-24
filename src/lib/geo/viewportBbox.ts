@@ -1,34 +1,70 @@
+// geo/viewportBbox.ts — вычисление bbox видимой области (3D-глобус / Leaflet)
+// и утилиты для запросов `/api/network` по прямоугольнику.
+//
+// BboxTuple — порядок [south, west, north, east], совпадающий с Leaflet
+// `map.getBounds().get{South,West,North,East}()` и со схемой параметра `bbox`
+// в `GET /api/network` (route.ts: [minLat, minLng, maxLat, maxLng]).
+
 import type { LatLng } from '@/lib/types';
 
-/** [minLat, minLng, maxLat, maxLng] */
-export type BboxTuple = readonly [number, number, number, number];
-
-const GLOBE_ZOOM_MIN = 1.2;
-const GLOBE_ZOOM_MAX = 6;
+export type BboxTuple = [minLat: number, minLng: number, maxLat: number, maxLng: number];
 
 /**
- * Оценка bbox видимой области глобуса по центру лицевой стороны и «зуму» камеры (position.z).
- * Чем дальше камера (больше z), тем шире охват.
+ * Порог «видимости» спутников.
+ * В 3D сравнивается с `camera.position.z` (диапазон ~[1.2, 6] в `EarthScene`):
+ * при близкой камере (z < 2) спутники скрываются, т.к. их орбита вне кадра.
+ * В 2D сравнивается с Leaflet `map.getZoom()` (целые [0..19]): на мировом
+ * виде (zoom < 2) точки спутников не показываем, чтобы не замусоривать карту.
  */
-export function bboxFromGlobeView(center: LatLng, globeZoom: number): BboxTuple {
-  const cz = Math.min(GLOBE_ZOOM_MAX, Math.max(GLOBE_ZOOM_MIN, globeZoom));
-  const u = (cz - GLOBE_ZOOM_MIN) / (GLOBE_ZOOM_MAX - GLOBE_ZOOM_MIN);
-  const latHalf = 4 + u * 80;
-  const lngHalf = 6 + u * 170;
-  let minLat = center.lat - latHalf;
-  let maxLat = center.lat + latHalf;
-  const minLng = center.lng - lngHalf;
-  const maxLng = center.lng + lngHalf;
-  minLat = Math.max(-85, minLat);
-  maxLat = Math.min(85, maxLat);
+export const SATELLITE_MIN_VISIBLE_ZOOM = 2;
+
+/** Радиус сферы глобуса в world-units Three (см. `factories.ts` / `EarthScene`). */
+const GLOBE_RADIUS = 1;
+
+/**
+ * bbox видимой «шапки» сферы для позиции камеры на расстоянии `zoom` от центра.
+ *
+ * Геометрия: камера в точке на расстоянии d от центра единичной сферы видит
+ * только шапку с угловым полурадиусом α = arccos(R/d). Переводим α в градусы
+ * по большому кругу и берём ± по широте, а по долготе масштабируем 1/cos(lat),
+ * потому что меридианы сходятся к полюсам. Небольшой множитель 1.1 — запас
+ * на перспективу (край шапки чуть заходит за горизонт на FOV ~45°).
+ */
+export function bboxFromGlobeView(center: LatLng, zoom: number): BboxTuple {
+  const d = Math.max(zoom, GLOBE_RADIUS + 1e-3);
+  const ratio = Math.min(1, GLOBE_RADIUS / d);
+  const alphaRad = Math.acos(ratio);
+  const alphaDeg = (alphaRad * 180) / Math.PI;
+  const halfSpanDeg = Math.min(90, alphaDeg * 1.1);
+
+  const minLat = Math.max(-90, center.lat - halfSpanDeg);
+  const maxLat = Math.min(90, center.lat + halfSpanDeg);
+
+  // Около полюсов cos(lat) → 0, даём клэмп, иначе долгота ушла бы в Infinity.
+  const cosLat = Math.max(0.05, Math.cos((center.lat * Math.PI) / 180));
+  const halfLngSpan = Math.min(180, halfSpanDeg / cosLat);
+
+  // Если видимая область покрывает более полуокружности по долготе — отдаём
+  // полный диапазон, чтобы не городить логику с пересечением антимеридиана:
+  // сервер `/api/network` ожидает монотонный bbox (minLng ≤ maxLng).
+  if (halfLngSpan >= 180) {
+    return [minLat, -180, maxLat, 180];
+  }
+  const minLng = Math.max(-180, center.lng - halfLngSpan);
+  const maxLng = Math.min(180, center.lng + halfLngSpan);
   return [minLat, minLng, maxLat, maxLng];
 }
 
-/** Небольшой запас по краям, чтобы при панорамировании не было «дыр» до следующего запроса. */
-export function expandBoundsForFetch(b: BboxTuple, ratio = 0.1): BboxTuple {
-  const [minLat, minLng, maxLat, maxLng] = b;
-  const latPad = Math.max((maxLat - minLat) * ratio, 0.25);
-  const lngPad = Math.max((maxLng - minLng) * ratio, 0.25);
+/**
+ * Расширяет bbox перед запросом к `/api/network`, чтобы на границе вьюпорта
+ * элементы (узлы, кабели) не «моргали» при лёгких сдвигах/зуме. Factor 0.2 =
+ * +20% к каждой стороне; серверный cap `pointCap` в route.ts защитит от
+ * перебора при полностью мировом bbox.
+ */
+export function expandBoundsForFetch(bbox: BboxTuple, factor = 0.2): BboxTuple {
+  const [minLat, minLng, maxLat, maxLng] = bbox;
+  const latPad = (maxLat - minLat) * factor;
+  const lngPad = (maxLng - minLng) * factor;
   return [
     Math.max(-90, minLat - latPad),
     Math.max(-180, minLng - lngPad),
@@ -38,28 +74,62 @@ export function expandBoundsForFetch(b: BboxTuple, ratio = 0.1): BboxTuple {
 }
 
 /**
- * Грубая проверка пересечения polyline с прямоугольником (AABB пути + пересечение с bbox).
- * Достаточно для отсечения кабелей вне вьюпорта без PostGIS.
+ * true — если ломаная `points` пересекает прямоугольник `bbox` (или хотя бы
+ * одна её вершина внутри). Используется в `GET /api/network` для отсечения
+ * кабелей, путь которых формально выходит за bbox вьюпорта.
+ *
+ * Клиппинг по Liang–Barsky в (lng, lat)-плоскости. В прод-данных кабели не
+ * пересекают антимеридиан чаще, чем единично; этот случай оставлен как TODO —
+ * можно предварительно разрезать сегмент по ±180° при необходимости.
  */
 export function pathIntersectsBbox(
-  points: Array<{ lat: number; lng: number }> | null | undefined,
+  points: ReadonlyArray<{ lat: number; lng: number }>,
   bbox: BboxTuple,
 ): boolean {
-  if (!Array.isArray(points) || points.length < 2) return false;
+  if (points.length === 0) return false;
   const [minLat, minLng, maxLat, maxLng] = bbox;
-  let pMinLat = Infinity;
-  let pMaxLat = -Infinity;
-  let pMinLng = Infinity;
-  let pMaxLng = -Infinity;
+
   for (const p of points) {
-    if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
-    pMinLat = Math.min(pMinLat, p.lat);
-    pMaxLat = Math.max(pMaxLat, p.lat);
-    pMinLng = Math.min(pMinLng, p.lng);
-    pMaxLng = Math.max(pMaxLng, p.lng);
+    if (p.lat >= minLat && p.lat <= maxLat && p.lng >= minLng && p.lng <= maxLng) {
+      return true;
+    }
   }
-  if (!Number.isFinite(pMinLat)) return false;
-  if (pMaxLat < minLat || pMinLat > maxLat) return false;
-  if (pMaxLng < minLng || pMinLng > maxLng) return false;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    if (segmentIntersectsBbox(points[i], points[i + 1], minLat, minLng, maxLat, maxLng)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function segmentIntersectsBbox(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+  minLat: number,
+  minLng: number,
+  maxLat: number,
+  maxLng: number,
+): boolean {
+  const dLng = b.lng - a.lng;
+  const dLat = b.lat - a.lat;
+  const p = [-dLng, dLng, -dLat, dLat];
+  const q = [a.lng - minLng, maxLng - a.lng, a.lat - minLat, maxLat - a.lat];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+      continue;
+    }
+    const t = q[i] / p[i];
+    if (p[i] < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+  }
   return true;
 }

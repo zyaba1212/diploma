@@ -1,8 +1,10 @@
 'use client';
+// EarthScene — компонент интерфейса (React).
+
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality';
+import { getEarthMaterialMode, getEarthMaxPixelRatio, getEarthSphereSegments } from '@/lib/earthQuality';
 import { disposeEarthTextures, loadEarthTextures } from '@/lib/loadEarthTextures';
 import {
   GLOBE_SCENE_BACKGROUND_HEX,
@@ -10,24 +12,90 @@ import {
   applyLoadedEarthTextures,
   updateGlobeFrontLabelsVisibility,
 } from '@/lib/three/globeAppearance';
-import { EQUIPMENT_FACTORIES, NODE_VISUALS, TYPE_LABELS_RU, createSatelliteObject } from '@/lib/three/factories';
+import { TYPE_LABELS_RU } from '@/lib/three/factories';
+import { colors } from '@/theme/colors';
 import { normalizeLatLng } from '@/lib/geo/normalizeLatLng';
-import { bboxFromGlobeView, expandBoundsForFetch, type BboxTuple } from '@/lib/geo/viewportBbox';
+import {
+  SATELLITE_MIN_VISIBLE_ZOOM,
+  bboxFromGlobeView,
+  expandBoundsForFetch,
+  type BboxTuple,
+} from '@/lib/geo/viewportBbox';
 import { applyGlobeCenterToLeafletMap, getFrontGlobeCenterLatLng, syncGlobeToMapCenter } from '@/lib/three/globeMapSync';
-import { latLngToVec3, makeTextMesh, disposeThreeObject } from '@/lib/three/utils';
+import { latLngToVec3, makeTextMesh } from '@/lib/three/utils';
+import { clearGlobeNetworkElements, syncGlobeNetworkElements } from '@/lib/three/syncGlobeNetworkElements';
 import { WORLD_LABELS } from '@/lib/three/labels';
 import { Panel } from './ui/Panel';
 import { Button } from './ui/Button';
 import { MapView } from './MapView';
 import type { LatLng, NetworkResponseDTO, Scope } from '@/lib/types';
+import {
+  cableSourceLinks,
+} from '@/lib/cableSourceLinks';
 import type L from 'leaflet';
 
+function isSatelliteElType(t: unknown): boolean {
+  return t === 'SATELLITE' || t === 'SATELLITE_RASSVET';
+}
+
 type ViewMode = 'GLOBE_3D' | 'MAP_2D';
+
+type EarthSceneProps = {
+  satelliteNameQuery?: string | null;
+};
+
+type GlobeNetworkElementCard = {
+  x: number;
+  y: number;
+  elName: string;
+  elType: string;
+  sourceUrl: string;
+  providerId: string;
+  providerName: string;
+  metadata: Record<string, unknown> | null;
+  scope: string;
+};
+
+function metadataRecord(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
+  return metadata && typeof metadata === 'object' ? metadata : null;
+}
+
+function metadataString(metadata: Record<string, unknown> | null, key: string): string | null {
+  const m = metadataRecord(metadata);
+  const raw = m?.[key];
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function metadataYearValue(metadata: Record<string, unknown> | null, key: string): number | null {
+  const m = metadataRecord(metadata);
+  const raw = m?.[key];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && /^\d{4}$/.test(raw.trim())) return Number(raw.trim());
+  return null;
+}
+
+function isOsmCableDataset(metadata: Record<string, unknown> | null): boolean {
+  const dataset = metadataRecord(metadata)?.dataset;
+  return dataset === 'openstreetmap' || dataset === 'osm_terrestrial_fibre';
+}
+
+function osmOperatorFromMetadata(metadata: Record<string, unknown> | null): string | null {
+  if (!isOsmCableDataset(metadata)) return null;
+  const meta = metadataRecord(metadata);
+  const osm = meta?.osm;
+  if (!osm || typeof osm !== 'object' || Array.isArray(osm)) return null;
+  const tags = (osm as Record<string, unknown>).tags;
+  if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return null;
+  const raw = (tags as Record<string, unknown>).operator;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
 
 /** Ранее использовался для авто-возврата в 3D; убран — ломал ручной режим «2D». */
 const ZOOM_MIN = 1.2;
 const ZOOM_MAX = 6;
 const ZOOM_STEP = 0.25;
+/** Порог смещения указателя (px), после которого жест считается вращением глобуса, а не кликом-«закреплением». */
+const GLOBE_LMB_DRAG_THRESHOLD_PX = 7;
 
 type NominatimSearchResult = {
   lat: string;
@@ -47,6 +115,15 @@ type NominatimReverseResult = {
 
 // WORLD_LABELS imported from '@/lib/three/labels'
 
+function pointInDomRect(clientX: number, clientY: number, rect: DOMRectReadOnly): boolean {
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
+/** Расширенный rect — «мост» от тонкого кабеля до карточки hover. */
+function padDomRect(rect: DOMRectReadOnly, pad: number): DOMRectReadOnly {
+  return new DOMRect(rect.left - pad, rect.top - pad, rect.width + pad * 2, rect.height + pad * 2);
+}
+
 function formatLocationLabel(data: NominatimReverseResult | null): string {
   const addr = data?.address ?? {};
   const city = addr.city || addr.town || addr.village || addr.hamlet;
@@ -58,14 +135,17 @@ function formatLocationLabel(data: NominatimReverseResult | null): string {
   return '—';
 }
 
+function sourceClassLabel(value: unknown): string | null {
+  if (value === 'official') return 'Официальный';
+  if (value === 'osm_verified') return 'OSM (проверенный)';
+  if (value === 'synthetic') return 'Модельный';
+  return null;
+}
+
 function GlobeLegendBody() {
   return (
     <>
       <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12, color: '#eaf2ff' }}>Легенда</div>
-      <div style={{ fontSize: 10, color: 'rgba(180,200,230,0.85)', marginBottom: 8, lineHeight: 1.45 }}>
-        Импорт OSM и подземного ВОЛС (data.gov.au) привязан к региону Австралии (Gold Coast). Подводные кабели — по
-        всему миру.
-      </div>
       {[
         { color: '#3a7bd5', label: 'Подводный оптовол. кабель' },
         { color: '#d4a54a', label: 'Подводный медный кабель' },
@@ -86,7 +166,6 @@ function GlobeLegendBody() {
       ))}
       <div style={{ marginTop: 4, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 4 }} />
       {[
-        { color: '#7aa2ff', label: 'Провайдер', shape: '◎' },
         { color: '#3ddc97', label: 'Сервер / Дата-центр', shape: '▮' },
         { color: '#f6c177', label: 'Коммутатор', shape: '▬' },
         { color: '#e6a7ff', label: 'Мультиплексор', shape: '⊛' },
@@ -97,7 +176,6 @@ function GlobeLegendBody() {
         { color: '#00e5ff', label: 'Mesh-ретранслятор', shape: '◈' },
         { color: '#ffd740', label: 'SMS-шлюз (2G)', shape: '◇' },
         { color: '#b388ff', label: 'VSAT-терминал', shape: '⬡' },
-        { color: '#69f0ae', label: 'Офлайн-очередь', shape: '▣' },
       ].map((item) => (
         <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ color: item.color, fontSize: 12, width: 14, textAlign: 'center', flexShrink: 0 }}>{item.shape}</span>
@@ -125,7 +203,7 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number): Promise<
   }
 }
 
-function EarthSceneComponent() {
+function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -147,19 +225,47 @@ function EarthSceneComponent() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchDropdownVisible, setSearchDropdownVisible] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
   const [targetCenter, setTargetCenter] = useState<LatLng | null>(null);
   const [mapLoadError, setMapLoadError] = useState<string | null>(null);
-  const [hoveredElement, setHoveredElement] = useState<{
-    x: number; y: number;
-    elName: string; elType: string; providerName: string;
-    metadata: Record<string, unknown> | null; scope: string;
-  } | null>(null);
-  /** Узкий экран: легенда по умолчанию свёрнута, чтобы не перекрывать глобус. */
+  const [hoveredElement, setHoveredElement] = useState<GlobeNetworkElementCard | null>(null);
+  /** Закреплённая ЛКМ (короткий клик без перетаскивания) карточка элемента сети — удобно для ссылок. */
+  const [pinnedElement, setPinnedElement] = useState<GlobeNetworkElementCard | null>(null);
+  const pinnedElementRef = useRef<GlobeNetworkElementCard | null>(null);
+  const globeHoverCardRef = useRef<HTMLDivElement | null>(null);
+  /** Слушатель window pointermove (пока открыта карточка) делегирует в логику из эффекта Three.js. */
+  const scheduleHoverFromPointerRef = useRef<(e: PointerEvent) => void>(() => {});
+  /** Легенда открывается по клику и по умолчанию свёрнута. */
   const [viewportNarrow, setViewportNarrow] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
 
+  useLayoutEffect(() => {
+    pinnedElementRef.current = pinnedElement;
+  }, [pinnedElement]);
+
   const globeGroup = useMemo(() => new THREE.Group(), []);
   const networkGroup = useMemo(() => new THREE.Group(), []);
+  /** Кабели/узлы из API — инкрементальный sync, без WORLD_LABELS. */
+  const globeNetworkElementsGroup = useMemo(() => new THREE.Group(), []);
+  /** Статические подписи WORLD_LABELS (не пересоздаются при каждом fetch сети). */
+  const globeWorldLabelsGroup = useMemo(() => new THREE.Group(), []);
+  const globeNetworkElementStateRef = useRef<
+    Map<string, { root: THREE.Object3D; sig: string }>
+  >(new Map());
+  const providerNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of network?.providers ?? []) {
+      map.set(p.id, p.name);
+    }
+    return map;
+  }, [network?.providers]);
+  const providerSourceUrlById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of network?.providers ?? []) {
+      map.set(p.id, p.sourceUrl ?? '');
+    }
+    return map;
+  }, [network?.providers]);
 
   const viewModeRef = useRef<ViewMode>(viewMode);
   const prevViewModeRef = useRef<ViewMode>(viewMode);
@@ -170,18 +276,18 @@ function EarthSceneComponent() {
   });
   /** Центр из кнопки «3D» до перехода — единственный явный источник для sync (порядок относительно onMapUnmount). */
   const pendingGlobeCenterRef = useRef<LatLng | null>(null);
-  /** Накопленные дельты drag (общие с циклом animate); сброс при MAP_2D→GLOBE_3D чтобы не сдвинуть глобус после sync. */
-  const pendingDragAccumRef = useRef({ dx: 0, dy: 0 });
-
   const networkAbortRef = useRef<AbortController | null>(null);
   const lastGlobeBboxKeyRef = useRef<string>('');
+  /** Мышь/тач крутит глобус или pinch — не дергать bbox/fetch и не тяжело обновлять лейблы. */
+  const globeInteractionBusyRef = useRef(false);
+  /** Тело тика bbox из эффекта ниже — вызов после окончания drag для немедленного resync. */
+  const runGlobeBboxTickRef = useRef<(() => void) | null>(null);
+  /** После перехода GLOBE_3D → MAP_2D выставить Leaflet zoom 12 в onMapReady. */
+  const applyMap2DZoom12Ref = useRef(false);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
-    const apply = () => {
-      setViewportNarrow(mq.matches);
-      if (!mq.matches) setLegendOpen(false);
-    };
+    const apply = () => setViewportNarrow(mq.matches);
     apply();
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
@@ -201,8 +307,6 @@ function EarthSceneComponent() {
     prevViewModeRef.current = viewMode;
 
     if (prev === 'MAP_2D' && viewMode === 'GLOBE_3D') {
-      pendingDragAccumRef.current.dx = 0;
-      pendingDragAccumRef.current.dy = 0;
       let c: LatLng;
       if (pendingGlobeCenterRef.current) {
         c = pendingGlobeCenterRef.current;
@@ -265,7 +369,7 @@ function EarthSceneComponent() {
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, getEarthMaxPixelRatio()));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -334,6 +438,8 @@ function EarthSceneComponent() {
     globeGroup.add(clouds);
 
     globeGroup.add(networkGroup);
+    networkGroup.add(globeNetworkElementsGroup);
+    networkGroup.add(globeWorldLabelsGroup);
     scene.add(globeGroup);
 
     syncGlobeToMapCenter(globeGroup, savedCenterRef.current.lat, savedCenterRef.current.lng);
@@ -361,27 +467,42 @@ function EarthSceneComponent() {
     window.addEventListener('resize', onResize);
 
     let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
     let touchDragging = false;
-    let lastTouchX = 0;
-    let lastTouchY = 0;
     let pinchActive = false;
-    let lastPinchDist = 0;
+    let globePointerDown = false;
+    let globeDragCommitted = false;
+    let globeDownX = 0;
+    let globeDownY = 0;
+    let pointerDownHitUserData: THREE.Object3D['userData'] | null = null;
 
-    const worldUp = new THREE.Vector3(0, 1, 0);
-    const camForward = new THREE.Vector3();
-    const camRight = new THREE.Vector3();
+    const syncGlobeInteractionBusyRef = () => {
+      globeInteractionBusyRef.current = dragging || touchDragging || pinchActive;
+    };
+
+    const scheduleGlobeBboxResyncIfIdle = (busyBefore: boolean) => {
+      syncGlobeInteractionBusyRef();
+      if (busyBefore && !globeInteractionBusyRef.current) {
+        lastGlobeBboxKeyRef.current = '';
+        requestAnimationFrame(() => {
+          runGlobeBboxTickRef.current?.();
+        });
+      }
+    };
+    let lastPinchDist = 0;
+    /** Есть опорный unit-вектор на сфере для инкрементального trackball. */
+    let globeDragHasAnchor = false;
+    const lastGlobeDir = new THREE.Vector3();
+    const currGlobeDir = new THREE.Vector3();
+    const rotAxis = new THREE.Vector3();
+    const sphereCenter = new THREE.Vector3();
+    const sphereScale = new THREE.Vector3();
+    const ocRay = new THREE.Vector3();
+    const TRACKBALL_MAX_RAD_PER_EVENT = 0.55;
 
     const pointerForHover = { x: 0, y: 0 };
     let hoverRafId = 0;
     let hoverScheduled = false;
     let lastHoverKey: string | null = null;
-
-    const rotationSensitivity = () => {
-      const camZ = cameraRef.current?.position.z ?? zoomRef.current;
-      return 0.003 * (ZOOM_MAX / Math.max(camZ, ZOOM_MIN));
-    };
 
     const saveGlobeFrontCenterToSavedRef = () => {
       const raw = getFrontGlobeCenterLatLng(globeGroup) ?? { lat: 0, lng: 0 };
@@ -403,16 +524,150 @@ function EarthSceneComponent() {
       hoverScheduled = false;
     };
 
+    const raycaster = new THREE.Raycaster();
+    raycaster.params.Line = { threshold: 0.01 };
+    const mouseNDC = new THREE.Vector2();
+    const MAX_HIT_DISTANCE_BEHIND_GLOBE = 0.028;
+
+    /** Меньше — выше приоритет при сортировке кандидатов (см. pickNetworkElementObjectAt). */
+    const getNetworkElTypePriority = (elType: unknown): number => {
+      if (typeof elType !== 'string') return 99;
+      if (isSatelliteElType(elType)) return 1;
+      if (elType.startsWith('CABLE_')) return 3;
+      return 2;
+    };
+
+    const pickNetworkElementObjectAt = (clientX: number, clientY: number): THREE.Object3D | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const cam = cameraRef.current;
+      if (!cam) return null;
+      raycaster.setFromCamera(mouseNDC, cam);
+
+      const globeHit = raycaster.intersectObject(globe, false)[0];
+      const globeDistance = globeHit?.distance;
+      const hideSatellites = zoomRef.current < SATELLITE_MIN_VISIBLE_ZOOM;
+      const hits = raycaster.intersectObjects([globeNetworkElementsGroup], true);
+      const candidates: Array<{ obj: THREE.Object3D; distance: number; priority: number }> = [];
+      const seenKeys = new Set<string>();
+
+      for (const h of hits) {
+        if (
+          typeof globeDistance === 'number' &&
+          h.distance > globeDistance + MAX_HIT_DISTANCE_BEHIND_GLOBE
+        ) {
+          continue;
+        }
+        let obj: THREE.Object3D | null = h.object;
+        while (obj && !obj.userData?.elType) obj = obj.parent;
+        if (!obj?.userData?.elType) continue;
+        if (hideSatellites && isSatelliteElType(obj.userData.elType)) continue;
+        const dedupeKey =
+          (typeof obj.userData.hoverKey === 'string' && obj.userData.hoverKey) || obj.uuid;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+        candidates.push({
+          obj,
+          distance: h.distance,
+          priority: getNetworkElTypePriority(obj.userData.elType),
+        });
+      }
+
+      if (candidates.length === 0) return null;
+      candidates.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.distance - b.distance;
+      });
+      return candidates[0]?.obj ?? null;
+    };
+
+    /** Луч из экранных координат → единичный вектор от центра глобуса к точке на сфере (world). */
+    const setCurrGlobeDirFromClient = (clientX: number, clientY: number): boolean => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const cam = cameraRef.current;
+      if (!cam) return false;
+      raycaster.setFromCamera(mouseNDC, cam);
+      globe.getWorldPosition(sphereCenter);
+      globe.getWorldScale(sphereScale);
+      const radius = Math.max(sphereScale.x, sphereScale.y, sphereScale.z);
+      // Аналитическое пересечение луча со сферой — без BVH/raycast по высокополигональному mesh (дешево на каждом pointermove).
+      const ray = raycaster.ray;
+      ocRay.copy(ray.origin).sub(sphereCenter);
+      const a = ray.direction.lengthSq();
+      const b = 2 * ocRay.dot(ray.direction);
+      const c = ocRay.dot(ocRay) - radius * radius;
+      const disc = b * b - 4 * a * c;
+      if (disc < 0) return false;
+      const sqrtD = Math.sqrt(disc);
+      let t = (-b - sqrtD) / (2 * a);
+      if (t < 1e-6) t = (-b + sqrtD) / (2 * a);
+      if (t < 1e-6) return false;
+      currGlobeDir.copy(ray.origin).addScaledVector(ray.direction, t).sub(sphereCenter).normalize();
+      return true;
+    };
+
+    const applyTrackballAt = (clientX: number, clientY: number) => {
+      if (!setCurrGlobeDirFromClient(clientX, clientY)) return;
+      if (!globeDragHasAnchor) {
+        lastGlobeDir.copy(currGlobeDir);
+        globeDragHasAnchor = true;
+        return;
+      }
+      rotAxis.crossVectors(lastGlobeDir, currGlobeDir);
+      const asq = rotAxis.lengthSq();
+      if (asq < 1e-16) return;
+      const sinHalf = Math.sqrt(asq);
+      let angle = Math.atan2(sinHalf, lastGlobeDir.dot(currGlobeDir));
+      angle = Math.min(angle, TRACKBALL_MAX_RAD_PER_EVENT);
+      rotAxis.multiplyScalar(1 / sinHalf);
+      globeGroup.rotateOnWorldAxis(rotAxis, angle);
+      globeGroup.quaternion.normalize();
+      lastGlobeDir.copy(currGlobeDir);
+    };
+
+    const pickNetworkElementUserDataAt = (
+      clientX: number,
+      clientY: number,
+    ): THREE.Object3D['userData'] | null => {
+      return pickNetworkElementObjectAt(clientX, clientY)?.userData ?? null;
+    };
+
+    const clearHoverCard = () => {
+      lastHoverKey = null;
+      setHoveredElement(null);
+    };
+
+    const pinCardFromUserData = (ud: THREE.Object3D['userData'], clientX: number, clientY: number) => {
+      setPinnedElement({
+        x: clientX,
+        y: clientY,
+        elName: ud.elName ?? '',
+        elType: ud.elType ?? '',
+        sourceUrl: ud.sourceUrl ?? '',
+        providerId: ud.providerId ?? '',
+        providerName: ud.providerName ?? '',
+        metadata: (ud.metadata as Record<string, unknown> | null) ?? null,
+        scope: String(ud.scope ?? ''),
+      });
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
       if (e.button !== 0) return;
       if (viewModeRef.current !== 'GLOBE_3D') return;
       cancelPendingHoverRaycast();
-      lastHoverKey = null;
-      setHoveredElement(null);
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
+      clearHoverCard();
+      pointerDownHitUserData = pickNetworkElementUserDataAt(e.clientX, e.clientY);
+      globePointerDown = true;
+      globeDragCommitted = false;
+      globeDownX = e.clientX;
+      globeDownY = e.clientY;
+      dragging = false;
+      syncGlobeInteractionBusyRef();
+      globeDragHasAnchor = false;
       try {
         renderer.domElement.setPointerCapture(e.pointerId);
       } catch {
@@ -421,8 +676,27 @@ function EarthSceneComponent() {
     };
     const onPointerUp = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
+      const hadShortGlobeClick =
+        globePointerDown && !globeDragCommitted && viewModeRef.current === 'GLOBE_3D';
+      globePointerDown = false;
+      globeDragCommitted = false;
+
+      if (hadShortGlobeClick) {
+        const ud = pickNetworkElementUserDataAt(e.clientX, e.clientY) ?? pointerDownHitUserData;
+        if (ud?.elType) {
+          pinCardFromUserData(ud, e.clientX, e.clientY);
+          clearHoverCard();
+        } else {
+          setPinnedElement(null);
+        }
+      }
+      pointerDownHitUserData = null;
+
+      const busyBefore = dragging || touchDragging || pinchActive;
       if (dragging) saveGlobeFrontCenterToSavedRef();
       dragging = false;
+      globeDragHasAnchor = false;
+      scheduleGlobeBboxResyncIfIdle(busyBefore);
       try {
         if (renderer.domElement.hasPointerCapture(e.pointerId)) {
           renderer.domElement.releasePointerCapture(e.pointerId);
@@ -432,24 +706,46 @@ function EarthSceneComponent() {
       }
     };
     const onLostPointerCapture = () => {
+      globePointerDown = false;
+      globeDragCommitted = false;
+      pointerDownHitUserData = null;
+      const busyBefore = dragging || touchDragging || pinchActive;
       if (dragging) saveGlobeFrontCenterToSavedRef();
       dragging = false;
+      globeDragHasAnchor = false;
+      scheduleGlobeBboxResyncIfIdle(busyBefore);
     };
     const onPointerCancel = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
+      globePointerDown = false;
+      globeDragCommitted = false;
+      pointerDownHitUserData = null;
+      const busyBefore = dragging || touchDragging || pinchActive;
       if (dragging) saveGlobeFrontCenterToSavedRef();
       dragging = false;
+      globeDragHasAnchor = false;
+      scheduleGlobeBboxResyncIfIdle(busyBefore);
     };
     const onPointerMove = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
       if (viewModeRef.current !== 'GLOBE_3D') return;
+      if (!globePointerDown) return;
+      if (!globeDragCommitted) {
+        const dx = e.clientX - globeDownX;
+        const dy = e.clientY - globeDownY;
+        if (dx * dx + dy * dy < GLOBE_LMB_DRAG_THRESHOLD_PX * GLOBE_LMB_DRAG_THRESHOLD_PX) return;
+        globeDragCommitted = true;
+        pointerDownHitUserData = null;
+        dragging = true;
+        syncGlobeInteractionBusyRef();
+        globeDragHasAnchor = false;
+        if (setCurrGlobeDirFromClient(e.clientX, e.clientY)) {
+          lastGlobeDir.copy(currGlobeDir);
+          globeDragHasAnchor = true;
+        }
+      }
       if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      pendingDragAccumRef.current.dx += dx;
-      pendingDragAccumRef.current.dy += dy;
+      applyTrackballAt(e.clientX, e.clientY);
     };
     const onWheel = (e: WheelEvent) => {
       if (viewModeRef.current !== 'GLOBE_3D') return;
@@ -462,22 +758,24 @@ function EarthSceneComponent() {
       setZoom(next);
     };
 
-    const raycaster = new THREE.Raycaster();
-    raycaster.params.Line = { threshold: 0.015 };
-    const mouseNDC = new THREE.Vector2();
-
     const onTouchStart = (e: TouchEvent) => {
       if (viewModeRef.current !== 'GLOBE_3D') return;
       if (e.touches.length === 2) {
         pinchActive = true;
         touchDragging = false;
+        globeDragHasAnchor = false;
         lastPinchDist = touchDistance(e.touches);
       } else if (e.touches.length === 1) {
         pinchActive = false;
         touchDragging = true;
-        lastTouchX = e.touches[0].clientX;
-        lastTouchY = e.touches[0].clientY;
+        globeDragHasAnchor = false;
+        const t = e.touches[0];
+        if (setCurrGlobeDirFromClient(t.clientX, t.clientY)) {
+          lastGlobeDir.copy(currGlobeDir);
+          globeDragHasAnchor = true;
+        }
       }
+      syncGlobeInteractionBusyRef();
     };
 
     const onTouchMove = (e: TouchEvent) => {
@@ -497,63 +795,79 @@ function EarthSceneComponent() {
         lastPinchDist = d;
       } else if (e.touches.length === 1 && touchDragging && !pinchActive) {
         const t = e.touches[0];
-        const dx = t.clientX - lastTouchX;
-        const dy = t.clientY - lastTouchY;
-        lastTouchX = t.clientX;
-        lastTouchY = t.clientY;
-        pendingDragAccumRef.current.dx += dx;
-        pendingDragAccumRef.current.dy += dy;
+        applyTrackballAt(t.clientX, t.clientY);
       }
     };
 
     const onTouchEnd = (e: TouchEvent) => {
       if (viewModeRef.current !== 'GLOBE_3D') return;
+      const busyBefore = dragging || touchDragging || pinchActive;
       if (e.touches.length === 0) {
         if (touchDragging && !pinchActive) saveGlobeFrontCenterToSavedRef();
         touchDragging = false;
         pinchActive = false;
         lastPinchDist = 0;
+        globeDragHasAnchor = false;
+        scheduleGlobeBboxResyncIfIdle(busyBefore);
       } else if (e.touches.length === 1) {
         pinchActive = false;
         touchDragging = true;
-        lastTouchX = e.touches[0].clientX;
-        lastTouchY = e.touches[0].clientY;
         lastPinchDist = 0;
+        globeDragHasAnchor = false;
+        const t = e.touches[0];
+        if (setCurrGlobeDirFromClient(t.clientX, t.clientY)) {
+          lastGlobeDir.copy(currGlobeDir);
+          globeDragHasAnchor = true;
+        }
+        syncGlobeInteractionBusyRef();
       } else if (e.touches.length === 2) {
         lastPinchDist = touchDistance(e.touches);
+        syncGlobeInteractionBusyRef();
       }
     };
 
     const flushHoverRaycast = () => {
       hoverScheduled = false;
       if (viewModeRef.current !== 'GLOBE_3D') {
-        lastHoverKey = null;
-        setHoveredElement(null);
+        clearHoverCard();
         return;
       }
-      if (dragging) {
-        lastHoverKey = null;
-        setHoveredElement(null);
+      if (globeInteractionBusyRef.current) {
+        clearHoverCard();
         return;
       }
+      if (pinnedElementRef.current) {
+        return;
+      }
+      const px = pointerForHover.x;
+      const py = pointerForHover.y;
+      const strictRect = globeHoverCardRef.current?.getBoundingClientRect();
+      const hasCardDom =
+        !!strictRect && strictRect.width > 0 && strictRect.height > 0;
+      if (hasCardDom && lastHoverKey !== null && pointInDomRect(px, py, strictRect)) {
+        // Не сдвигаем hover-карточку вместе с курсором поверх самой карточки:
+        // иначе карточка "едет" за мышью и может залипать без реального hover по объекту.
+        setHoveredElement((prev) => prev);
+        return;
+      }
+
       const rect = renderer.domElement.getBoundingClientRect();
-      mouseNDC.x = ((pointerForHover.x - rect.left) / rect.width) * 2 - 1;
-      mouseNDC.y = -((pointerForHover.y - rect.top) / rect.height) * 2 + 1;
-      const cam = cameraRef.current;
-      if (!cam) return;
-      raycaster.setFromCamera(mouseNDC, cam);
-      const hits = raycaster.intersectObjects(networkGroup.children, true);
-      let found: THREE.Object3D | null = null;
-      for (const h of hits) {
-        let obj: THREE.Object3D | null = h.object;
-        while (obj && !obj.userData?.elType) obj = obj.parent;
-        if (obj?.userData?.elType) { found = obj; break; }
+      const pointerInsideCanvas = pointInDomRect(px, py, rect);
+      if (!pointerInsideCanvas) {
+        const bridgeRect = hasCardDom && strictRect ? padDomRect(strictRect, 28) : null;
+        if (bridgeRect && pointInDomRect(px, py, bridgeRect)) {
+          // Bridge разрешает короткий переход с тонкого объекта на карточку,
+          // но не должен перемещать карточку за пределы фактического объекта.
+          setHoveredElement((prev) => prev);
+          return;
+        }
+        clearHoverCard();
+        return;
       }
+      const found = pickNetworkElementObjectAt(px, py);
       if (found) {
         const ud = found.userData;
-        const key = `${ud.elType}|${String(ud.elName ?? '')}|${String(ud.providerName ?? '')}`;
-        const px = pointerForHover.x;
-        const py = pointerForHover.y;
+        const key = `${ud.elType}|${String(ud.elName ?? '')}|${String(ud.providerId ?? '')}|${String(ud.hoverKey ?? '')}`;
         if (key === lastHoverKey) {
           setHoveredElement((prev) =>
             prev
@@ -563,6 +877,8 @@ function EarthSceneComponent() {
                   y: py,
                   elName: ud.elName ?? '',
                   elType: ud.elType ?? '',
+                  sourceUrl: ud.sourceUrl ?? '',
+                  providerId: ud.providerId ?? '',
                   providerName: ud.providerName ?? '',
                   metadata: ud.metadata ?? null,
                   scope: ud.scope ?? '',
@@ -575,29 +891,34 @@ function EarthSceneComponent() {
             y: py,
             elName: ud.elName ?? '',
             elType: ud.elType ?? '',
+            sourceUrl: ud.sourceUrl ?? '',
+            providerId: ud.providerId ?? '',
             providerName: ud.providerName ?? '',
             metadata: ud.metadata ?? null,
             scope: ud.scope ?? '',
           });
         }
       } else if (lastHoverKey !== null) {
-        lastHoverKey = null;
-        setHoveredElement(null);
+        const bridgeRect = hasCardDom && strictRect ? padDomRect(strictRect, 28) : null;
+        if (bridgeRect && pointInDomRect(px, py, bridgeRect)) {
+          setHoveredElement((prev) => prev);
+          return;
+        }
+        clearHoverCard();
       }
     };
 
     const onHoverMove = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
       if (viewModeRef.current !== 'GLOBE_3D') {
-        lastHoverKey = null;
-        setHoveredElement(null);
+        clearHoverCard();
         return;
       }
-      if (dragging) {
-        lastHoverKey = null;
-        setHoveredElement(null);
+      if (globeInteractionBusyRef.current) {
+        clearHoverCard();
         return;
       }
+      if (pinnedElementRef.current) return;
       pointerForHover.x = e.clientX;
       pointerForHover.y = e.clientY;
       if (hoverScheduled) return;
@@ -607,6 +928,8 @@ function EarthSceneComponent() {
         flushHoverRaycast();
       });
     };
+
+    scheduleHoverFromPointerRef.current = onHoverMove;
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointerup', onPointerUp);
@@ -620,6 +943,8 @@ function EarthSceneComponent() {
     renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: true });
     renderer.domElement.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
+    let lastShowSatellites: boolean | null = null;
+    let lastNetworkGroupLenForSat = -1;
     const animate = () => {
       const r = rendererRef.current;
       const s = sceneRef.current;
@@ -627,30 +952,33 @@ function EarthSceneComponent() {
       if (!r || !s || !c) return;
       frameRef.current = requestAnimationFrame(animate);
 
-      const pad = pendingDragAccumRef.current;
-      if (pad.dx !== 0 || pad.dy !== 0) {
-        const sens = rotationSensitivity();
-        const cam = cameraRef.current;
-        if (cam) {
-          cam.getWorldDirection(camForward);
-          camRight.crossVectors(camForward, worldUp);
-          if (camRight.lengthSq() < 1e-12) {
-            camRight.set(1, 0, 0);
-          } else {
-            camRight.normalize();
-          }
-          globeGroup.rotateOnWorldAxis(worldUp, pad.dx * sens);
-          globeGroup.rotateOnWorldAxis(camRight, pad.dy * sens);
-          globeGroup.quaternion.normalize();
-        }
-        pad.dx = 0;
-        pad.dy = 0;
-      }
-
       // Local 3D labels: показываем только объекты рядом с текущим "центром" глобуса (front-face only).
-      if (viewModeRef.current === 'GLOBE_3D' && nodeLabelCandidatesRef.current.length > 0) {
+      if (
+        viewModeRef.current === 'GLOBE_3D' &&
+        !globeInteractionBusyRef.current &&
+        nodeLabelCandidatesRef.current.length > 0
+      ) {
         const z = zoomRef.current;
         updateGlobeFrontLabelsVisibility(nodeLabelCandidatesRef.current, globeGroup, z, 56);
+      }
+      if (viewModeRef.current === 'GLOBE_3D' && globeNetworkElementsGroup.children.length > 0) {
+        const showSatellites = zoomRef.current >= SATELLITE_MIN_VISIBLE_ZOOM;
+        const satLen = globeNetworkElementsGroup.children.length;
+        if (lastNetworkGroupLenForSat !== satLen) {
+          lastNetworkGroupLenForSat = satLen;
+          lastShowSatellites = null;
+        }
+        if (lastShowSatellites !== showSatellites) {
+          lastShowSatellites = showSatellites;
+          for (const ch of globeNetworkElementsGroup.children) {
+            // Только корневой Group.visible=false не отключает raycast у дочерних Mesh (Three.js).
+            if (isSatelliteElType(ch.userData?.elType)) {
+              ch.traverse((obj) => {
+                obj.visible = showSatellites;
+              });
+            }
+          }
+        }
       }
       r.render(s, c);
     };
@@ -688,8 +1016,31 @@ function EarthSceneComponent() {
       rendererRef.current = null;
       sceneRef.current = null;
       cameraRef.current = null;
+      scheduleHoverFromPointerRef.current = () => {};
     };
-  }, [globeGroup, networkGroup]);
+  }, [globeGroup, networkGroup, globeNetworkElementsGroup, globeWorldLabelsGroup]);
+
+  /** Пока открыта карточка (hover или закреп), движение над ней не доходит до canvas — слушаем window. */
+  useEffect(() => {
+    if (viewMode !== 'GLOBE_3D' || (!hoveredElement && !pinnedElement)) return;
+    const onWinPointerMove = (e: PointerEvent) => {
+      scheduleHoverFromPointerRef.current(e);
+    };
+    window.addEventListener('pointermove', onWinPointerMove);
+    return () => window.removeEventListener('pointermove', onWinPointerMove);
+  }, [hoveredElement, pinnedElement, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== 'GLOBE_3D') setPinnedElement(null);
+  }, [viewMode]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPinnedElement(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (viewMode !== 'MAP_2D') {
@@ -739,7 +1090,7 @@ function EarthSceneComponent() {
   }, [reverseCenter, viewMode]);
 
   useEffect(() => {
-    if (viewMode !== 'MAP_2D') return;
+    if (viewMode !== 'MAP_2D' && viewMode !== 'GLOBE_3D') return;
     if (!searchDropdownVisible) {
       setSearchResults([]);
       setSearchError(null);
@@ -822,8 +1173,12 @@ function EarthSceneComponent() {
       setMapZoom(12);
       const m = leafletMapRef.current;
       if (m) applyGlobeCenterToLeafletMap(m, n, 12);
+    } else if (viewMode === 'GLOBE_3D') {
+      syncGlobeToMapCenter(globeGroup, n.lat, n.lng);
+      savedCenterRef.current = { lat: n.lat, lng: n.lng };
+      pendingGlobeCenterRef.current = n;
     }
-  }, [viewMode]);
+  }, [viewMode, globeGroup]);
 
   const runNetworkFetch = useCallback(
     async (bbox: BboxTuple, z: number) => {
@@ -864,6 +1219,7 @@ function EarthSceneComponent() {
     if (viewMode !== 'GLOBE_3D') return;
     lastGlobeBboxKeyRef.current = '';
     const tick = () => {
+      if (globeInteractionBusyRef.current) return;
       const raw = getFrontGlobeCenterLatLng(globeGroup);
       const c = raw
         ? normalizeLatLng(raw.lat, raw.lng)
@@ -874,9 +1230,13 @@ function EarthSceneComponent() {
       lastGlobeBboxKeyRef.current = key;
       void runNetworkFetch(bbox, zoomRef.current);
     };
+    runGlobeBboxTickRef.current = tick;
     tick();
-    const id = window.setInterval(tick, 800);
-    return () => clearInterval(id);
+    const id = window.setInterval(tick, 1500);
+    return () => {
+      clearInterval(id);
+      runGlobeBboxTickRef.current = null;
+    };
   }, [viewMode, globeGroup, runNetworkFetch]);
 
   const handleMapViewportChange = useCallback(
@@ -900,121 +1260,13 @@ function EarthSceneComponent() {
     void runNetworkFetch(bbox, map.getZoom());
   }, [scope, viewMode, runNetworkFetch]);
 
+  /** WORLD_LABELS один раз при первом 3D; не зависит от fetch сети. */
   useEffect(() => {
-    // Rebuild 3D network visualization (cables + nodes + local labels).
-    const disposedMaterials = new WeakSet<THREE.Material>();
-    const disposedTextures = new WeakSet<THREE.Texture>();
-    for (const child of networkGroup.children.slice()) disposeThreeObject(child, disposedMaterials, disposedTextures);
-    networkGroup.clear();
-    nodeLabelCandidatesRef.current = [];
-
-    if (!network) return;
+    if (viewMode !== 'GLOBE_3D') return;
+    if (globeWorldLabelsGroup.children.length > 0) return;
 
     const DEG2RAD = Math.PI / 180;
-
-    // Clipping plane hides cables on the far side of the globe (back-face culling).
-    const cableClipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0.15);
-    const cableClip = [cableClipPlane];
-
-    const cableMatFiberSub = new THREE.LineBasicMaterial({ color: 0x3a7bd5, transparent: true, opacity: 0.9, clippingPlanes: cableClip });
-    const cableMatCopperSub = new THREE.LineBasicMaterial({ color: 0xd4a54a, transparent: true, opacity: 0.9, clippingPlanes: cableClip });
-    const cableMatFiberUnd = new THREE.LineDashedMaterial({
-      color: 0x00e676,
-      transparent: true,
-      opacity: 0.8,
-      dashSize: 0.04,
-      gapSize: 0.03,
-      depthTest: false,
-      depthWrite: false,
-      clippingPlanes: cableClip,
-    });
-    const cableMatCopperUnd = new THREE.LineDashedMaterial({
-      color: 0xff7043,
-      transparent: true,
-      opacity: 0.75,
-      dashSize: 0.04,
-      gapSize: 0.03,
-      depthTest: false,
-      depthWrite: false,
-      clippingPlanes: cableClip,
-    });
-
-    const nodeVisuals = NODE_VISUALS;
-
-    for (const el of network.elements) {
-      const type = el.type;
-
-      // Cables (path)
-      const isSubFiber = type === 'CABLE_FIBER';
-      const isSubCopper = type === 'CABLE_COPPER';
-      const isUndFiber = type === 'CABLE_UNDERGROUND_FIBER';
-      const isUndCopper = type === 'CABLE_UNDERGROUND_COPPER';
-      const isCable = (isSubFiber || isSubCopper || isUndFiber || isUndCopper) && Array.isArray(el.path);
-
-      if (isCable && el.path) {
-        const radius = isUndFiber || isUndCopper ? 1.002 : 1.001;
-        let mat: THREE.LineBasicMaterial | THREE.LineDashedMaterial;
-        if (isUndFiber) mat = cableMatFiberUnd;
-        else if (isUndCopper) mat = cableMatCopperUnd;
-        else if (isSubFiber) mat = cableMatFiberSub;
-        else mat = cableMatCopperSub;
-
-        const pts = el.path
-          .map((p) => latLngToVec3(p.lat, p.lng, radius))
-          .filter((v): v is THREE.Vector3 => Boolean(v));
-        if (pts.length < 2) continue;
-
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        const line = new THREE.Line(geo, mat);
-        if (mat instanceof THREE.LineDashedMaterial) {
-          line.computeLineDistances();
-        }
-        line.frustumCulled = false;
-        const providerName = network.providers.find((p) => p.id === el.providerId)?.name ?? '';
-        line.userData = { elName: el.name, elType: type, providerName, metadata: el.metadata, scope: el.scope };
-        networkGroup.add(line);
-        continue;
-      }
-
-      // Nodes (lat/lng)
-      if (typeof el.lat !== 'number' || typeof el.lng !== 'number') continue;
-      const visual = nodeVisuals[type];
-      if (!visual) continue;
-
-      let altitudeKm = 0;
-      if (typeof el.altitude === 'number' && Number.isFinite(el.altitude)) altitudeKm = el.altitude;
-      else if (type === 'SATELLITE') altitudeKm = 550;
-      const nodeR = type === 'SATELLITE' ? 1.0 + altitudeKm / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
-
-      const pos = latLngToVec3(el.lat, el.lng, nodeR);
-      if (!pos) continue;
-
-      const normal = pos.clone().normalize();
-      const providerName = network.providers.find((p) => p.id === el.providerId)?.name ?? '';
-      const elUserData = { elName: el.name, elType: type, providerName, metadata: el.metadata, scope: el.scope };
-      if (type === 'SATELLITE') {
-        const satelliteObj = createSatelliteObject(visual.size, visual.color, visual.emissive);
-        satelliteObj.position.copy(pos);
-        satelliteObj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-        satelliteObj.userData = elUserData;
-        networkGroup.add(satelliteObj);
-      } else {
-        const factory = EQUIPMENT_FACTORIES[type];
-        let marker: THREE.Object3D;
-        if (factory) {
-          marker = factory(visual.size, visual.color, visual.emissive);
-        } else {
-          marker = createSatelliteObject(visual.size, visual.color, visual.emissive);
-        }
-        marker.position.copy(pos);
-        marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-        marker.userData = elUserData;
-        networkGroup.add(marker);
-      }
-
-      // Автоподписи на сфере только для стран/городов/вод (WORLD_LABELS + geo), не для узлов сети — имена узлов в панели hover.
-    }
-
+    nodeLabelCandidatesRef.current = [];
     for (const wl of WORLD_LABELS) {
       const labelR = wl.kind === 'water' ? 1.001 : 1.018;
       const pos = latLngToVec3(wl.lat, wl.lng, labelR);
@@ -1026,7 +1278,7 @@ function EarthSceneComponent() {
         kind: wl.kind,
       });
       mesh.visible = false;
-      networkGroup.add(mesh);
+      globeWorldLabelsGroup.add(mesh);
 
       const latRad = wl.lat * DEG2RAD;
       const lngRad = wl.lng * DEG2RAD;
@@ -1038,7 +1290,52 @@ function EarthSceneComponent() {
         cosLat: Math.cos(latRad),
       });
     }
-  }, [network, networkGroup]);
+  }, [viewMode, globeWorldLabelsGroup]);
+
+  /** Инкрементальное обновление кабелей/узлов в globeNetworkElementsGroup. */
+  useEffect(() => {
+    const disposedTextures = new WeakSet<THREE.Texture>();
+
+    if (viewMode !== 'GLOBE_3D') {
+      clearGlobeNetworkElements(
+        globeNetworkElementsGroup,
+        globeNetworkElementStateRef.current,
+        disposedTextures,
+      );
+      return;
+    }
+
+    if (!network) {
+      clearGlobeNetworkElements(
+        globeNetworkElementsGroup,
+        globeNetworkElementStateRef.current,
+        disposedTextures,
+      );
+      return;
+    }
+
+    syncGlobeNetworkElements({
+      elements: network.elements,
+      elementsGroup: globeNetworkElementsGroup,
+      providerNameById,
+      stateById: globeNetworkElementStateRef.current,
+      disposedTextures,
+    });
+  }, [viewMode, network, providerNameById, globeNetworkElementsGroup]);
+
+  // Единый источник отображения:
+  // 1) pinnedElement (явное закрепление ЛКМ), иначе 2) hoveredElement (временный hover).
+  const globeInfoCard = pinnedElement ?? hoveredElement;
+  const cardOwner =
+    metadataString(globeInfoCard?.metadata ?? null, 'owner');
+  const cardLaunchDate =
+    metadataString(globeInfoCard?.metadata ?? null, 'launchDate') ??
+    metadataString(globeInfoCard?.metadata ?? null, 'launch_date');
+  const cardLaunchYear =
+    metadataYearValue(globeInfoCard?.metadata ?? null, 'launchYear') ??
+    metadataYearValue(globeInfoCard?.metadata ?? null, 'launch_year');
+  const cardOsmOperator = osmOperatorFromMetadata(globeInfoCard?.metadata ?? null);
+  const providerLabel = isOsmCableDataset(globeInfoCard?.metadata ?? null) ? 'Источник данных' : 'Провайдер';
 
   return (
     <>
@@ -1064,8 +1361,6 @@ function EarthSceneComponent() {
                   ? { lat: map.getCenter().lat, lng: map.getCenter().lng }
                   : savedCenterRef.current;
                 const center = normalizeLatLng(raw.lat, raw.lng);
-                pendingDragAccumRef.current.dx = 0;
-                pendingDragAccumRef.current.dy = 0;
                 savedCenterRef.current = center;
                 setTargetCenter(center);
                 syncGlobeToMapCenter(globeGroup, center.lat, center.lng);
@@ -1078,6 +1373,8 @@ function EarthSceneComponent() {
             <Button
               onClick={() => {
                 setMapCenterFromGlobe();
+                applyMap2DZoom12Ref.current = true;
+                setMapZoom(12);
                 setViewMode('MAP_2D');
               }}
             >
@@ -1114,7 +1411,7 @@ function EarthSceneComponent() {
               <span style={{ color: 'var(--danger)' }}>network error: {networkError}</span>
             ) : network ? (
               <span>
-                providers: {network.providers.length}, elements: {network.elements.length}
+                elements: {network.elements.length}
               </span>
             ) : (
               <span>loading…</span>
@@ -1123,71 +1420,155 @@ function EarthSceneComponent() {
         </Panel>
       </div>
 
-      {/* Hover tooltip for network elements */}
-      {hoveredElement && viewMode === 'GLOBE_3D' && (
+      {/* Карточка элемента сети: hover или закрепление ЛКМ (короткий клик) */}
+      {globeInfoCard && viewMode === 'GLOBE_3D' && (
         <div
+          ref={globeHoverCardRef}
           style={{
             position: 'fixed',
-            left: hoveredElement.x + 14,
-            top: hoveredElement.y + 14,
-            zIndex: 50,
-            pointerEvents: 'none',
-            background: 'rgba(10,20,40,0.92)',
-            border: '1px solid rgba(120,160,255,0.35)',
-            borderRadius: 10,
-            padding: '10px 14px',
+            left: globeInfoCard.x + 14,
+            top: globeInfoCard.y + 14,
+            zIndex: 120,
+            pointerEvents: 'auto',
+            background: colors.bg.card,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 4,
+            padding: pinnedElement ? '10px 32px 10px 14px' : '10px 14px',
             maxWidth: 340,
-            backdropFilter: 'blur(8px)',
             fontSize: 13,
-            color: '#eaf2ff',
+            color: colors.text.primary,
             lineHeight: 1.5,
           }}
         >
-          {hoveredElement.elName && (
-            <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 14 }}>{hoveredElement.elName}</div>
+          {pinnedElement ? (
+            <button
+              type="button"
+              aria-label="Снять закрепление"
+              onClick={() => setPinnedElement(null)}
+              style={{
+                position: 'absolute',
+                top: 6,
+                right: 6,
+                width: 26,
+                height: 26,
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 18,
+                lineHeight: 1,
+                color: colors.text.primary,
+                background: colors.bg.primary,
+                border: `1px solid ${colors.border}`,
+              }}
+            >
+              ×
+            </button>
+          ) : null}
+          {globeInfoCard.elName && (
+            <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 14 }}>{globeInfoCard.elName}</div>
           )}
-          <div style={{ color: 'rgba(180,210,255,0.85)', marginBottom: 2 }}>
-            {TYPE_LABELS_RU[hoveredElement.elType] ?? hoveredElement.elType}
+          <div style={{ color: colors.text.secondary, marginBottom: 2 }}>
+            {TYPE_LABELS_RU[globeInfoCard.elType] ?? globeInfoCard.elType}
           </div>
-          {hoveredElement.providerName && (
+          {globeInfoCard.providerName && (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Провайдер:</span> {hoveredElement.providerName}
+              <span style={{ color: colors.text.secondary }}>{providerLabel}:</span> {globeInfoCard.providerName}
             </div>
           )}
-          {hoveredElement.metadata?.countries ? (
+          {cardOsmOperator ? (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Страны:</span>{' '}
-              {Array.isArray(hoveredElement.metadata.countries)
-                ? (hoveredElement.metadata.countries as string[]).join(', ')
-                : String(hoveredElement.metadata.countries)}
+              <span style={{ color: colors.text.secondary }}>Оператор:</span> {cardOsmOperator}
             </div>
           ) : null}
-          {hoveredElement.metadata?.year ? (
+          {globeInfoCard.metadata?.sourceClass ? (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Год:</span> {String(hoveredElement.metadata.year)}
+              <span style={{ color: colors.text.secondary }}>Класс источника:</span>{' '}
+              {sourceClassLabel(globeInfoCard.metadata.sourceClass) ?? String(globeInfoCard.metadata.sourceClass)}
+            </div>
+          ) : null}
+          {globeInfoCard.metadata?.sourceClass === 'synthetic' ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Статус:</span> Модельная трасса (справочная)
+            </div>
+          ) : null}
+          {isSatelliteElType(globeInfoCard.elType) && cardOwner ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Owner:</span> {cardOwner}
+            </div>
+          ) : null}
+          {isSatelliteElType(globeInfoCard.elType) && (cardLaunchDate || cardLaunchYear !== null) ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Запуск:</span>{' '}
+              {cardLaunchDate ?? (cardLaunchYear !== null ? String(cardLaunchYear) : '—')}
+            </div>
+          ) : null}
+          {globeInfoCard.metadata?.countries ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Страны:</span>{' '}
+              {Array.isArray(globeInfoCard.metadata.countries)
+                ? (globeInfoCard.metadata.countries as string[]).join(', ')
+                : String(globeInfoCard.metadata.countries)}
+            </div>
+          ) : null}
+          {globeInfoCard.metadata?.year ? (
+            <div style={{ marginBottom: 2 }}>
+              <span style={{ color: colors.text.secondary }}>Год:</span> {String(globeInfoCard.metadata.year)}
             </div>
           ) : null}
           {(() => {
+            const providerSourceUrl = globeInfoCard.providerId
+              ? (providerSourceUrlById.get(globeInfoCard.providerId) ?? '')
+              : '';
+            const links = cableSourceLinks({
+              elType: globeInfoCard.elType,
+              cableName: globeInfoCard.elName,
+              metadata: globeInfoCard.metadata,
+              elementSourceUrl: globeInfoCard.sourceUrl,
+              providerSourceUrl,
+              satelliteNameQuery,
+            });
+            if (links.length === 0) return null;
+            return (
+              <div style={{ marginTop: 6, marginBottom: 2, fontSize: 12 }}>
+                <div style={{ color: colors.text.secondary, marginBottom: 4 }}>Источники</div>
+                {links.map((link) => (
+                  <div key={`${link.label}:${link.href}`} style={{ marginBottom: 4 }}>
+                    <a href={link.href} target="_blank" rel="noopener noreferrer" style={{ color: colors.accent }}>
+                      {link.label}
+                    </a>
+                    {link.domain ? (
+                      <span style={{ marginLeft: 6, color: colors.text.secondary, fontSize: 11 }}>
+                        ({link.domain})
+                      </span>
+                    ) : null}
+                    {link.note ? (
+                      <div style={{ marginTop: 1, color: colors.text.secondary, fontSize: 11 }}>{link.note}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+          {(() => {
             const wfs =
-              hoveredElement.metadata?.wfs && typeof hoveredElement.metadata.wfs === 'object'
-                ? (hoveredElement.metadata.wfs as Record<string, unknown>)
+              globeInfoCard.metadata?.wfs && typeof globeInfoCard.metadata.wfs === 'object'
+                ? (globeInfoCard.metadata.wfs as Record<string, unknown>)
                 : null;
             const desc =
-              (typeof hoveredElement.metadata?.description === 'string' && hoveredElement.metadata.description.trim()
-                ? hoveredElement.metadata.description
+              (typeof globeInfoCard.metadata?.description === 'string' && globeInfoCard.metadata.description.trim()
+                ? globeInfoCard.metadata.description
                 : null) ??
               (typeof wfs?.description === 'string' ? wfs.description : null);
             if (!desc || !String(desc).trim()) return null;
             return (
-              <div style={{ marginBottom: 2, fontStyle: 'italic', color: 'rgba(200,220,255,0.7)' }}>
+              <div style={{ marginBottom: 2, fontStyle: 'italic', color: colors.text.secondary }}>
                 {String(desc)}
               </div>
             );
           })()}
           {(() => {
             const wfs =
-              hoveredElement.metadata?.wfs && typeof hoveredElement.metadata.wfs === 'object'
-                ? (hoveredElement.metadata.wfs as Record<string, unknown>)
+              globeInfoCard.metadata?.wfs && typeof globeInfoCard.metadata.wfs === 'object'
+                ? (globeInfoCard.metadata.wfs as Record<string, unknown>)
                 : null;
             if (!wfs) return null;
             const folder = wfs.Folder;
@@ -1196,119 +1577,173 @@ function EarthSceneComponent() {
               <>
                 {typeof folder === 'string' && folder.trim() ? (
                   <div style={{ marginBottom: 2, fontSize: 12 }}>
-                    <span style={{ color: '#8ab4f8' }}>Папка (WFS):</span> {folder}
+                    <span style={{ color: colors.text.secondary }}>Папка (WFS):</span> {folder}
                   </div>
                 ) : null}
                 {typeof phone === 'string' && phone.trim() ? (
                   <div style={{ marginBottom: 2, fontSize: 12 }}>
-                    <span style={{ color: '#8ab4f8' }}>Телефон:</span> {phone}
+                    <span style={{ color: colors.text.secondary }}>Телефон:</span> {phone}
                   </div>
                 ) : null}
               </>
             );
           })()}
-          {hoveredElement.metadata?.operator ? (
+          {globeInfoCard.metadata?.operator ? (
             <div style={{ marginBottom: 2 }}>
-              <span style={{ color: '#8ab4f8' }}>Оператор:</span> {String(hoveredElement.metadata.operator)}
+              <span style={{ color: colors.text.secondary }}>Оператор:</span> {String(globeInfoCard.metadata.operator)}
             </div>
           ) : null}
-          <div style={{ marginTop: 4, fontSize: 11, color: 'rgba(140,170,220,0.7)' }}>
-            {hoveredElement.scope === 'GLOBAL' ? 'Глобальный' : hoveredElement.scope === 'LOCAL' ? 'Локальный' : ''}
+          <div style={{ marginTop: 4, fontSize: 11, color: colors.text.secondary }}>
+            {pinnedElement ? 'Закреплено — ×, Esc или ЛКМ по фону глобуса. ' : null}
+            {globeInfoCard.scope === 'GLOBAL' ? 'Глобальный' : globeInfoCard.scope === 'LOCAL' ? 'Локальный' : ''}
           </div>
         </div>
       )}
 
-      {/* Legend overlay (3D mode only); на узких экранах — кнопка + панель, чтобы не перекрывать глобус */}
-      {viewMode === 'GLOBE_3D' &&
-        (viewportNarrow ? (
-          <>
-            {legendOpen ? (
-              <div
-                role="presentation"
-                onClick={() => setLegendOpen(false)}
-                style={{
-                  position: 'fixed',
-                  inset: 0,
-                  zIndex: 9,
-                  background: 'rgba(0,0,0,0.22)',
-                }}
-              />
-            ) : null}
+      {/* Поиск населённого пункта поверх 3D (как на странице предложения) */}
+      {viewMode === 'GLOBE_3D' && (
+        <div
+          className="earth-globe-search-overlay"
+          style={{
+            position: 'absolute',
+            top: 62,
+            right: 12,
+            zIndex: 12,
+            width: 260,
+            maxWidth: 'calc(100vw - 24px)',
+            pointerEvents: 'auto',
+          }}
+        >
+          <input
+            value={searchQuery}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSearchQuery(v);
+              setSearchDropdownVisible(v.trim().length >= 2);
+            }}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            placeholder="Поиск поселения…"
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              borderRadius: 4,
+              border: `1px solid ${searchFocused ? colors.accent : colors.border}`,
+              background: colors.bg.card,
+              color: colors.text.primary,
+              fontSize: 12,
+              outline: 'none',
+            }}
+          />
+          {searchDropdownVisible && (
             <div
               style={{
                 position: 'absolute',
-                right: 12,
-                bottom: 12,
-                zIndex: 10,
-                maxWidth: 'min(210px, calc(100vw - 24px))',
-                pointerEvents: 'auto',
+                top: '100%',
+                left: 0,
+                right: 0,
+                marginTop: 4,
+                background: colors.bg.card,
+                border: `1px solid ${colors.border}`,
+                borderRadius: 4,
+                maxHeight: 180,
+                overflowY: 'auto',
+                zIndex: 20,
               }}
             >
-              {legendOpen ? (
-                <div
-                  id="globe-legend-panel"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Легенда типов сети"
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    background: 'rgba(10,20,40,0.94)',
-                    border: '1px solid rgba(120,160,255,0.2)',
-                    borderRadius: 10,
-                    padding: '10px 14px',
-                    fontSize: 11,
-                    color: '#c8daf0',
-                    lineHeight: 1.7,
-                    backdropFilter: 'blur(6px)',
-                    maxHeight: 'min(45vh, 340px)',
-                    overflowY: 'auto',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
-                  }}
-                >
-                  <GlobeLegendBody />
-                  <Button
-                    type="button"
-                    onClick={() => setLegendOpen(false)}
-                    style={{ marginTop: 10, width: '100%', padding: '8px 10px' }}
-                  >
-                    Закрыть
-                  </Button>
-                </div>
+              {searchLoading && searchResults.length === 0 ? (
+                <div style={{ padding: 8, fontSize: 11, color: 'var(--muted)' }}>Загрузка…</div>
+              ) : searchError ? (
+                <div style={{ padding: 8, fontSize: 11, color: 'var(--danger)' }}>{searchError}</div>
+              ) : searchResults.length === 0 ? (
+                <div style={{ padding: 8, fontSize: 11, color: 'var(--muted)' }}>Ничего не найдено</div>
               ) : (
-                <Button
-                  type="button"
-                  onClick={() => setLegendOpen(true)}
-                  aria-expanded={false}
-                  aria-controls="globe-legend-panel"
-                  style={{ padding: '10px 14px', boxShadow: '0 4px 16px rgba(0,0,0,0.35)' }}
-                >
-                  Легенда
-                </Button>
+                searchResults.map((r, idx) => (
+                  <button
+                    key={`${r.lat}:${r.lon}:${idx}`}
+                    type="button"
+                    onClick={() => handleSelectSearchResult(r)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '6px 10px',
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--text)',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {(r.display_name ?? `${r.lat}, ${r.lon}`).slice(0, 80)}
+                  </button>
+                ))
               )}
             </div>
-          </>
-        ) : (
+          )}
+        </div>
+      )}
+
+      {/* Legend overlay (3D mode only): сворачиваемая панель со скроллом */}
+      {viewMode === 'GLOBE_3D' && (
+        <>
+          {legendOpen && viewportNarrow ? (
+            <div
+              role="presentation"
+              onClick={() => setLegendOpen(false)}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 9,
+                background: 'rgba(0,0,0,0.22)',
+              }}
+            />
+          ) : null}
           <div
-            id="globe-legend-panel"
             style={{
               position: 'absolute',
               right: 12,
               bottom: 12,
               zIndex: 10,
-              background: 'rgba(10,20,40,0.82)',
-              border: '1px solid rgba(120,160,255,0.2)',
-              borderRadius: 10,
-              padding: '10px 14px',
-              fontSize: 11,
-              color: '#c8daf0',
-              lineHeight: 1.7,
-              backdropFilter: 'blur(6px)',
-              maxWidth: 210,
+              maxWidth: 'min(210px, calc(100vw - 24px))',
+              pointerEvents: 'auto',
             }}
           >
-            <GlobeLegendBody />
+            {legendOpen ? (
+              <div
+                id="globe-legend-panel"
+                role="dialog"
+                aria-modal={viewportNarrow ? 'true' : undefined}
+                aria-label="Легенда типов сети"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  marginBottom: 8,
+                  background: colors.bg.card,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 4,
+                  padding: '10px 14px',
+                  fontSize: 11,
+                  color: colors.text.primary,
+                  lineHeight: 1.7,
+                  maxHeight: 'min(22vh, 170px)',
+                  overflowY: 'auto',
+                }}
+              >
+                <GlobeLegendBody />
+              </div>
+            ) : null}
+            <Button
+              type="button"
+              onClick={() => setLegendOpen((prev) => !prev)}
+              aria-expanded={legendOpen}
+              aria-controls="globe-legend-panel"
+              style={{ padding: '10px 14px' }}
+            >
+              {legendOpen ? 'Легенда ▲' : 'Легенда ▼'}
+            </Button>
           </div>
-        ))}
+        </>
+      )}
 
       {viewMode === 'MAP_2D' ? (
         <div
@@ -1322,12 +1757,19 @@ function EarthSceneComponent() {
           <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
             <MapView
               network={network}
+              mapZoom={mapZoom}
               center={targetCenter}
               initialCenter={targetCenter}
               onCenterChanged={handleCenterChanged}
               onMapReady={(m) => {
                 leafletMapRef.current = m;
                 setMapLoadError(null);
+                if (applyMap2DZoom12Ref.current) {
+                  const c = savedCenterRef.current;
+                  applyGlobeCenterToLeafletMap(m, { lat: c.lat, lng: c.lng }, 12);
+                  setMapZoom(12);
+                  applyMap2DZoom12Ref.current = false;
+                }
               }}
               onMapUnmount={(center) => {
                 leafletMapRef.current = null;
@@ -1346,7 +1788,8 @@ function EarthSceneComponent() {
                 background: 'rgba(0,0,0,0.6)', zIndex: 2,
               }}>
                 <div style={{
-                  background: 'var(--panel)', padding: 24, borderRadius: 12,
+                  background: colors.bg.card, padding: 24, borderRadius: 4,
+                  border: `1px solid ${colors.border}`,
                   maxWidth: 400, textAlign: 'center',
                 }}>
                   <p style={{ color: 'var(--danger)', marginBottom: 8 }}>Не удалось загрузить карту</p>
@@ -1355,9 +1798,9 @@ function EarthSceneComponent() {
                     type="button"
                     onClick={() => { setMapLoadError(null); setViewMode('MAP_2D'); }}
                     style={{
-                      marginTop: 12, padding: '6px 16px', borderRadius: 8,
-                      border: '1px solid var(--border)', background: 'var(--panel)',
-                      color: 'var(--text)', cursor: 'pointer',
+                      marginTop: 12, padding: '6px 16px', borderRadius: 4,
+                      border: `1px solid ${colors.accent}`, background: 'transparent',
+                      color: colors.text.primary, cursor: 'pointer',
                     }}
                   >
                     Повторить
@@ -1394,14 +1837,16 @@ function EarthSceneComponent() {
                   setSearchQuery(v);
                   setSearchDropdownVisible(v.trim().length >= 2);
                 }}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
                 placeholder="Поиск населённого пункта…"
                 style={{
                   flex: 1,
                   padding: '8px 10px',
-                  borderRadius: 10,
-                  border: '1px solid var(--border)',
-                  background: 'rgba(255,255,255,0.06)',
-                  color: 'var(--text)',
+                  borderRadius: 4,
+                  border: `1px solid ${searchFocused ? colors.accent : colors.border}`,
+                  background: colors.bg.primary,
+                  color: colors.text.primary,
                   outline: 'none',
                   fontSize: 13,
                 }}
@@ -1428,9 +1873,9 @@ function EarthSceneComponent() {
               <div
                 style={{
                   marginTop: 8,
-                  borderRadius: 12,
-                  border: '1px solid var(--border)',
-                  background: 'rgba(0,0,0,0.35)',
+                  borderRadius: 4,
+                  border: `1px solid ${colors.border}`,
+                  background: colors.bg.card,
                   padding: 4,
                   // Make at most ~3 items visible, then allow scrolling for the rest.
                   maxHeight: searchResults.length > 3 ? 3 * 40 : undefined,
@@ -1451,10 +1896,10 @@ function EarthSceneComponent() {
                         width: '100%',
                         textAlign: 'left',
                         padding: '8px 8px',
-                        borderRadius: 10,
+                        borderRadius: 4,
                         border: 'none',
                         background: 'transparent',
-                        color: 'var(--text)',
+                        color: colors.text.primary,
                         cursor: 'pointer',
                         fontSize: 13,
                       }}
@@ -1471,8 +1916,8 @@ function EarthSceneComponent() {
           <div
             style={{
               position: 'absolute',
-              right: 16,
-              bottom: 80,
+              right: 12,
+              bottom: 12,
               zIndex: 12,
               pointerEvents: 'auto',
               display: 'grid',
@@ -1500,16 +1945,15 @@ function EarthSceneComponent() {
                   style={{
                     width: 36,
                     height: 36,
-                    borderRadius: 8,
-                    border: '1px solid var(--border)',
-                    background: 'rgba(0,0,0,0.45)',
-                    color: 'var(--text)',
+                    borderRadius: 4,
+                    border: `1px solid ${colors.border}`,
+                    background: colors.bg.card,
+                    color: colors.text.primary,
                     fontSize: 16,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    backdropFilter: 'blur(6px)',
                   }}
                 >
                   {dir.label}

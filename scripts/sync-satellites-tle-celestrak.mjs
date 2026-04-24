@@ -19,6 +19,9 @@ const BASE_PROVIDER_ID = "celestrak-tle";
 const PROVIDER_NAME_BASE = "Celestrak TLE — Satellites";
 const PROVIDER_LICENSE_NOTE =
   "TLE data from Celestrak (check Celestrak terms of use). Provide attribution per source site requirements.";
+const SATCAT_BASE_URL = process.env.CELESTRAK_SATCAT_URL || "https://celestrak.org/satcat/records.php";
+const SATCAT_TIMEOUT_MS = Number(process.env.CELESTRAK_SATCAT_TIMEOUT_MS || 10_000);
+const SATCAT_LOOKUP_CONCURRENCY = Number(process.env.CELESTRAK_SATCAT_CONCURRENCY || 6);
 
 function parseArgs(argv) {
   let dryRun = false;
@@ -108,7 +111,96 @@ async function fetchTleText(group) {
   return res.text();
 }
 
-function buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochIsoFinal) {
+function normalizeSatcatRecord(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw;
+  const ownerRaw =
+    rec.OWNER ??
+    rec.owner ??
+    rec.owner_name ??
+    rec.ownerName ??
+    null;
+  const launchDateRaw =
+    rec.LAUNCH_DATE ??
+    rec.launch_date ??
+    rec.launchDate ??
+    null;
+  const owner = typeof ownerRaw === "string" ? ownerRaw.trim() : "";
+  const launchDate = typeof launchDateRaw === "string" ? launchDateRaw.trim() : "";
+  const launchYearFromDate = launchDate.match(/^(\d{4})-/)?.[1] ?? null;
+  const launchYearRaw =
+    rec.LAUNCH_YEAR ??
+    rec.launch_year ??
+    rec.launchYear ??
+    launchYearFromDate;
+  const launchYearNum =
+    typeof launchYearRaw === "number"
+      ? launchYearRaw
+      : typeof launchYearRaw === "string" && /^\d{4}$/.test(launchYearRaw.trim())
+        ? Number(launchYearRaw.trim())
+        : null;
+  return {
+    owner: owner || null,
+    launchDate: launchDate || null,
+    launchYear: Number.isFinite(launchYearNum) ? launchYearNum : null,
+  };
+}
+
+async function fetchSatcatByNoradCatId(noradCatId) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SATCAT_TIMEOUT_MS);
+  try {
+    const url = `${SATCAT_BASE_URL}?CATNR=${encodeURIComponent(noradCatId)}&FORMAT=JSON`;
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`SATCAT HTTP ${res.status}`);
+    const json = await res.json().catch(() => null);
+    const records = Array.isArray(json) ? json : [];
+    const first = records[0];
+    const normalized = normalizeSatcatRecord(first);
+    return normalized;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`Warning: SATCAT lookup failed for ${noradCatId}: ${msg}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function buildSatcatLookup(parsed, limit) {
+  const ids = [...new Set(parsed.slice(0, limit).map((sat) => sat.line1.substring(2, 7).trim()).filter(Boolean))];
+  const out = new Map();
+  const concurrency = Number.isFinite(SATCAT_LOOKUP_CONCURRENCY) && SATCAT_LOOKUP_CONCURRENCY > 0 ? SATCAT_LOOKUP_CONCURRENCY : 6;
+  for (let i = 0; i < ids.length; i += concurrency) {
+    const chunk = ids.slice(i, i + concurrency);
+    const rows = await Promise.all(
+      chunk.map(async (noradCatId) => {
+        const satcat = await fetchSatcatByNoradCatId(noradCatId);
+        return { noradCatId, satcat };
+      }),
+    );
+    for (const row of rows) {
+      if (row.satcat) out.set(row.noradCatId, row.satcat);
+    }
+  }
+  return out;
+}
+
+function buildSatelliteMetadata(group, noradCatId, epochIsoFinal, satcat) {
+  const noradStr = typeof noradCatId === "string" ? noradCatId.trim() : String(noradCatId);
+  return {
+    dataset: "celestrak-tle",
+    licenseNote: PROVIDER_LICENSE_NOTE,
+    tle: { group, noradCatId: noradStr },
+    computedAt: epochIsoFinal,
+    importedAt: new Date().toISOString(),
+    ...(satcat?.owner ? { owner: satcat.owner } : {}),
+    ...(satcat?.launchDate ? { launchDate: satcat.launchDate } : {}),
+    ...(satcat?.launchYear ? { launchYear: satcat.launchYear } : {}),
+  };
+}
+
+function buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochIsoFinal, satcatByNorad) {
   const upserts = [];
   for (const sat of parsed.slice(0, limit)) {
     const noradCatId = sat.line1.substring(2, 7).trim();
@@ -120,6 +212,8 @@ function buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochI
     if (!pos) continue;
 
     const name = sat.name || `NORAD ${noradCatId}`;
+    const satcat = satcatByNorad.get(noradCatId) ?? null;
+    const metadata = buildSatelliteMetadata(group, noradCatId, epochIsoFinal, satcat);
     upserts.push({
       where: { sourceId },
       create: {
@@ -131,13 +225,7 @@ function buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochI
         lat: pos.lat,
         lng: pos.lng,
         altitude: pos.altitudeKm,
-        metadata: {
-          dataset: "celestrak-tle",
-          licenseNote: PROVIDER_LICENSE_NOTE,
-          tle: { group, noradCatId },
-          computedAt: epochIsoFinal,
-          importedAt: new Date().toISOString(),
-        },
+        metadata,
       },
       update: {
         providerId,
@@ -145,13 +233,7 @@ function buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochI
         lat: pos.lat,
         lng: pos.lng,
         altitude: pos.altitudeKm,
-        metadata: {
-          dataset: "celestrak-tle",
-          licenseNote: PROVIDER_LICENSE_NOTE,
-          tle: { group, noradCatId },
-          computedAt: epochIsoFinal,
-          importedAt: new Date().toISOString(),
-        },
+        metadata,
       },
     });
   }
@@ -163,14 +245,14 @@ async function upsertProvider(providerId, scope, group, sourceUrl) {
     where: { id: providerId },
     update: {
       name: `${PROVIDER_NAME_BASE} (${group})`,
-      sourceUrl: `${sourceUrl} (License note: ${PROVIDER_LICENSE_NOTE})`,
+      sourceUrl,
       scope,
     },
     create: {
       id: providerId,
       name: `${PROVIDER_NAME_BASE} (${group})`,
       scope,
-      sourceUrl: `${sourceUrl} (License note: ${PROVIDER_LICENSE_NOTE})`,
+      sourceUrl,
     },
   });
 }
@@ -201,8 +283,10 @@ async function main() {
   const tleText = await fetchTleText(group);
   const parsed = parseTleText(tleText);
   console.log(`Parsed TLE satellites (${group}): ${parsed.length}`);
+  const satcatLookup = await buildSatcatLookup(parsed, limit);
+  console.log(`Loaded SATCAT metadata for ${satcatLookup.size}/${Math.min(limit, parsed.length)} satellite(s).`);
 
-  const upserts = buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochIsoFinal);
+  const upserts = buildUpserts(parsed, limit, scope, group, providerId, epochDate, epochIsoFinal, satcatLookup);
   console.log(`Prepared ${upserts.length} satellite(s) from '${group}'.`);
 
   // --- Starlink group ---
@@ -214,7 +298,18 @@ async function main() {
       const slText = await fetchTleText(slGroup);
       const slParsed = parseTleText(slText);
       console.log(`Parsed Starlink TLE: ${slParsed.length}`);
-      starlinkUpserts = buildUpserts(slParsed, starlinkLimit, scope, slGroup, slProviderId, epochDate, epochIsoFinal);
+      const slSatcatLookup = await buildSatcatLookup(slParsed, starlinkLimit);
+      console.log(`Loaded SATCAT metadata for Starlink ${slSatcatLookup.size}/${Math.min(starlinkLimit, slParsed.length)} satellite(s).`);
+      starlinkUpserts = buildUpserts(
+        slParsed,
+        starlinkLimit,
+        scope,
+        slGroup,
+        slProviderId,
+        epochDate,
+        epochIsoFinal,
+        slSatcatLookup,
+      );
       console.log(`Prepared ${starlinkUpserts.length} Starlink satellite(s).`);
     } catch (err) {
       console.warn(`Warning: failed to fetch Starlink TLEs: ${err.message}`);

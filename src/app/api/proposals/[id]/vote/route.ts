@@ -1,9 +1,12 @@
+// HTTP API /api/proposals/[id]/vote — Next.js Route Handler.
+
 import { NextResponse } from 'next/server';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { prisma } from '@/lib/prisma';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -70,7 +73,7 @@ export async function POST(req: Request, { params }: Params) {
 
   const proposal = await prisma.proposal.findUnique({
     where: { id },
-    select: { id: true, status: true, votingEndsAt: true },
+    select: { id: true, status: true, votingEndsAt: true, authorPubkey: true },
   });
 
   if (!proposal) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -93,6 +96,10 @@ export async function POST(req: Request, { params }: Params) {
     if (!ok) return NextResponse.json({ error: 'invalid signature' }, { status: 400 });
   } catch {
     return NextResponse.json({ error: 'invalid base58' }, { status: 400 });
+  }
+
+  if (await isUserBanned(voterPubkey)) {
+    return userBannedResponsePlain();
   }
 
   // Send on-chain Memo tx (dev mode: mock)

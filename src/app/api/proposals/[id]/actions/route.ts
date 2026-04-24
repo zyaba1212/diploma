@@ -1,12 +1,16 @@
+// HTTP API /api/proposals/[id]/actions — Next.js Route Handler.
+
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import type { ChangeActionType, Prisma, ProposalStatus } from '@prisma/client';
+import type { ChangeActionType, Prisma } from '@prisma/client';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { getClientIp, checkRateLimit } from '@/lib/rateLimit';
 import { buildNetworkElementCreateData, buildNetworkElementUpdateData, isNetworkElementType } from '@/lib/stage7/networkElementOps';
 import { internalApiError } from '@/lib/apiError';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
+import { canAppendSingleChangeAction } from '@/lib/stage7/proposalMutationPolicy';
 
 type Params = {
   params: Promise<{
@@ -21,8 +25,6 @@ type Body = {
   elementPayload: unknown;
   reversePayload?: unknown;
 };
-
-const VALID_PROPOSAL_STATUSES: ProposalStatus[] = ['DRAFT', 'SUBMITTED', 'ACCEPTED', 'REJECTED'];
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -40,7 +42,7 @@ export async function POST(req: Request, { params }: Params) {
   }
 
   const clientIp = getClientIp(req);
-  if (!(await checkRateLimit(`proposals.actions:${clientIp}`, 20, 60_000))) {
+  if (!(await checkRateLimit(`proposals.actions:${clientIp}`, 200, 60_000))) {
     return NextResponse.json({ error: 'rate limit exceeded' }, { status: 429 });
   }
 
@@ -101,13 +103,17 @@ export async function POST(req: Request, { params }: Params) {
   });
 
   if (!proposal) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  if (!VALID_PROPOSAL_STATUSES.includes(proposal.status)) {
-    return NextResponse.json({ error: 'invalid proposal status' }, { status: 409 });
+  if (proposal.status === 'REJECTED' || proposal.status === 'APPLIED' || proposal.status === 'CANCELLED') {
+    return NextResponse.json({ error: 'proposal cannot be modified in this status' }, { status: 409 });
   }
-
-  // On Stage 7 we keep it permissive: allow actions while proposal is editable (not REJECTED).
-  if (proposal.status === 'REJECTED') {
-    return NextResponse.json({ error: 'proposal is REJECTED' }, { status: 409 });
+  if (!canAppendSingleChangeAction(proposal.status)) {
+    return NextResponse.json(
+      {
+        error:
+          'single ChangeAction append is allowed only for DRAFT; use POST /api/proposals/:id/sync-actions to replace the sandbox set on SUBMITTED (no votes, no chain tx)',
+      },
+      { status: 409 },
+    );
   }
 
   if (!signature) {
@@ -129,6 +135,10 @@ export async function POST(req: Request, { params }: Params) {
   const ok = nacl.sign.detached.verify(msgBytes, sigBytes, pkBytes);
   if (!ok) {
     return NextResponse.json({ error: 'signature invalid' }, { status: 401 });
+  }
+
+  if (await isUserBanned(proposal.authorPubkey)) {
+    return userBannedResponsePlain();
   }
 
   try {

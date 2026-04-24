@@ -18,6 +18,8 @@ const BASE_PROVIDER_ID = "osm-underground-telecom-cables-copper";
 const PROVIDER_NAME = "OpenStreetMap — Underground telecom cables (copper)";
 const PROVIDER_SOURCE_URL = "https://www.openstreetmap.org/";
 const PROVIDER_LICENSE_NOTE = "OpenStreetMap data © contributors, ODbL 1.0 — include attribution (per ODbL).";
+const OSM_DATASET = "openstreetmap";
+const OSM_SOURCE_CLASS = "osm_verified";
 
 const FIBER_FALLBACK_PROVIDER_SOURCE_URL = "https://data.gov.au/data/dataset/fibre-optic-cable";
 const FIBER_FALLBACK_PROVIDER_LICENSE_NOTE =
@@ -174,12 +176,6 @@ async function main() {
   // Overpass `limit` support varies; we enforce limit in JS.
   const ways = elements.filter((e) => e.type === "way");
   console.log(`Overpass returned ways: ${ways.length}`);
-  if (ways.length === 0) {
-    console.warn(
-      "OSM: zero telecom copper cable ways in bbox. Tags man_made=cable + telecom:medium=copper are sparse in OSM; " +
-        "try a larger --bbox or another region. Fallback: --fallback-reclassify-fiber (see seed env).",
-    );
-  }
 
   const upserts = [];
   for (const way of ways.slice(0, limit)) {
@@ -208,7 +204,8 @@ async function main() {
         name,
         path,
         metadata: {
-          dataset: "openstreetmap",
+          dataset: OSM_DATASET,
+          sourceClass: OSM_SOURCE_CLASS,
           licenseNote: PROVIDER_LICENSE_NOTE,
           transportMode: "underground",
           underground: true,
@@ -227,7 +224,8 @@ async function main() {
         providerId,
         path,
         metadata: {
-          dataset: "openstreetmap",
+          dataset: OSM_DATASET,
+          sourceClass: OSM_SOURCE_CLASS,
           licenseNote: PROVIDER_LICENSE_NOTE,
           transportMode: "underground",
           underground: true,
@@ -280,6 +278,7 @@ async function main() {
           path: fiber.path,
           metadata: {
             dataset: "fallback-reclassified-from-underground-fiber",
+            sourceClass: OSM_SOURCE_CLASS,
             licenseNote: FIBER_FALLBACK_PROVIDER_LICENSE_NOTE,
             transportMode: "underground",
             underground: true,
@@ -299,6 +298,7 @@ async function main() {
           providerId,
           metadata: {
             dataset: "fallback-reclassified-from-underground-fiber",
+            sourceClass: OSM_SOURCE_CLASS,
             licenseNote: FIBER_FALLBACK_PROVIDER_LICENSE_NOTE,
             transportMode: "underground",
             underground: true,
@@ -322,14 +322,14 @@ async function main() {
     where: { id: providerId },
     update: {
       name: PROVIDER_NAME,
-      sourceUrl: upserts.length === 0 ? `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE})` : `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE}; fallback if needed)`,
+      sourceUrl: PROVIDER_SOURCE_URL,
       scope,
     },
     create: {
       id: providerId,
       name: PROVIDER_NAME,
       scope,
-      sourceUrl: `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE}; fallback if needed)`,
+      sourceUrl: PROVIDER_SOURCE_URL,
     },
   });
 

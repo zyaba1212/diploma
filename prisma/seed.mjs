@@ -44,6 +44,12 @@ function envInt(name, defaultValue) {
   return n;
 }
 
+function envString(name, defaultValue = "") {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  return String(raw).trim();
+}
+
 function assertScope(scope) {
   const s = String(scope ?? "").toUpperCase();
   if (s !== "GLOBAL" && s !== "LOCAL") throw new Error(`Invalid SEED_SCOPE: ${scope}`);
@@ -108,6 +114,10 @@ async function main() {
   const importUndergroundCables = envBool("SEED_IMPORT_UNDERGROUND_CABLES", true);
   const importBaseStations = envBool("SEED_IMPORT_BASE_STATIONS", true);
   const importSatellites = envBool("SEED_IMPORT_SATELLITES", true);
+  const osmTerrestrialFibreRegions = envString("SEED_OSM_TERRESTRIAL_FIBRE_REGIONS", "");
+  const osmTerrestrialFibreLimit = envInt("SEED_OSM_TERRESTRIAL_FIBRE_LIMIT", 120);
+  const afterfibreFile = envString("SEED_AFTERFIBRE_FILE", "");
+  const afterfibreUrl = envString("SEED_AFTERFIBRE_URL", "");
 
   // Keep existing demo satellite so UI still has at least one SATELLITE element.
   const seedDemoSatellite = envBool("SEED_DEMO_SATELLITE", true);
@@ -141,10 +151,26 @@ async function main() {
     await runNodeScript("scripts/sync-satellites-tle-celestrak.mjs", ["--scope", scope, "--limit", String(satelliteLimit)]);
   }
 
-  // Global backbone terrestrial cables (representative routes).
-  const importGlobalBackbone = envBool("SEED_IMPORT_GLOBAL_BACKBONE", true);
-  if (importGlobalBackbone) {
-    await runNodeScript("scripts/sync-global-backbone-cables.mjs", []);
+  // Real terrestrial fibre from OpenStreetMap (Overpass: man_made=cable + telecom:medium=fibre).
+  // Disabled by default: Overpass is heavy and can rate-limit; enable explicitly when needed.
+  const importOsmTerrestrialFibre = envBool("SEED_IMPORT_OSM_TERRESTRIAL_FIBRE", false);
+  if (importOsmTerrestrialFibre) {
+    const args = ["--scope", scope, "--limit", String(osmTerrestrialFibreLimit)];
+    if (osmTerrestrialFibreRegions) args.push("--region", osmTerrestrialFibreRegions);
+    await runNodeScript("scripts/sync-osm-terrestrial-fibre.mjs", args);
+  }
+
+  // AfTerFibre — public terrestrial fibre dataset for Africa (CC-BY 4.0).
+  // Disabled by default: requires network download of the AfTerFibre GeoJSON.
+  const importAfterfibre = envBool("SEED_IMPORT_AFTERFIBRE", false);
+  if (importAfterfibre) {
+    const args = ["--scope", scope];
+    if (afterfibreFile) args.push("--file", afterfibreFile);
+    if (afterfibreUrl) args.push("--url", afterfibreUrl);
+    if (!afterfibreFile && !afterfibreUrl) {
+      throw new Error("SEED_IMPORT_AFTERFIBRE=1 requires SEED_AFTERFIBRE_FILE or SEED_AFTERFIBRE_URL");
+    }
+    await runNodeScript("scripts/sync-afterfibre.mjs", args);
   }
 
   // Major data centers and Internet Exchange points.
@@ -157,6 +183,7 @@ async function main() {
   if (envBool("SEED_BELARUS_PROPOSAL", true)) {
     await runNodeScript("scripts/seed-belarus-proposal.mjs", []);
   }
+
 }
 
 main().catch(async (e) => {

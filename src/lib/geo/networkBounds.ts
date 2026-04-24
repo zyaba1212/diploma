@@ -1,138 +1,36 @@
-import type { LatLng, NetworkElementDTO, NetworkResponseDTO } from '@/lib/types';
+// geo/networkBounds.ts — bbox данных сети для автозумирования карты.
+//
+// Используется в `MapView` через проп `autoFitBounds`: перед `fitBounds` мы
+// добавляем вокруг «сырого» bbox данных небольшой отступ, чтобы точки и
+// кабели не прилипали вплотную к краям вьюпорта.
 
+/** Прямоугольник в географических координатах (не путать с Leaflet `LatLngBounds`). */
 export type LatLngBounds = {
   minLat: number;
-  maxLat: number;
   minLng: number;
+  maxLat: number;
   maxLng: number;
 };
 
-function addPoint(bounds: LatLngBounds, lat: number, lng: number): void {
-  bounds.minLat = Math.min(bounds.minLat, lat);
-  bounds.maxLat = Math.max(bounds.maxLat, lat);
-  bounds.minLng = Math.min(bounds.minLng, lng);
-  bounds.maxLng = Math.max(bounds.maxLng, lng);
-}
-
-function addPath(bounds: LatLngBounds, path: LatLng[] | null | undefined): void {
-  if (!Array.isArray(path)) return;
-  for (const p of path) {
-    if (!p || typeof p.lat !== 'number' || typeof p.lng !== 'number') continue;
-    if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
-    addPoint(bounds, p.lat, p.lng);
-  }
-}
-
-/** Bounding box over all coordinates in the network response (cables + nodes). */
-export function computeNetworkBounds(network: NetworkResponseDTO | null): LatLngBounds | null {
-  if (!network?.elements?.length) return null;
-
-  const b: LatLngBounds = {
-    minLat: Infinity,
-    maxLat: -Infinity,
-    minLng: Infinity,
-    maxLng: -Infinity,
-  };
-
-  for (const el of network.elements) {
-    addPath(b, el.path);
-    if (typeof el.lat === 'number' && typeof el.lng === 'number' && Number.isFinite(el.lat) && Number.isFinite(el.lng)) {
-      addPoint(b, el.lat, el.lng);
-    }
-  }
-
-  if (!Number.isFinite(b.minLat) || b.minLat === Infinity) return null;
-
-  return b;
-}
-
-function isRegionalDatasetElement(el: NetworkElementDTO, providersById: Map<string, string>): boolean {
-  const meta = el.metadata;
-  const ds = meta && typeof meta.dataset === 'string' ? meta.dataset : '';
-  if (
-    ds === 'gold_coast_fibre_optic_cable' ||
-    ds === 'openstreetmap' ||
-    ds === 'fallback-reclassified-from-underground-fiber'
-  ) {
-    return true;
-  }
-  const sid = typeof el.sourceId === 'string' ? el.sourceId : '';
-  if (sid.startsWith('gold-coast') || sid.startsWith('osm-')) return true;
-  const pname = el.providerId ? providersById.get(el.providerId) ?? '' : '';
-  if (/gold coast|openstreetmap/i.test(pname)) return true;
-  return false;
-}
-
 /**
- * Bounds for map/globe focus: City of Gold Coast + OSM imports (same bbox as seed), excluding worldwide submarine cables.
+ * Раздувает bbox на относительную долю `factor` от его размера по каждой оси
+ * (по умолчанию 8%), но не меньше `minPadDeg` градусов — иначе для очень
+ * локальных bbox (один дата-центр) отступ был бы визуально нулевым.
+ * Результат клампится к валидным диапазонам широты/долготы.
  */
-export function computeRegionalDataBounds(network: NetworkResponseDTO | null): LatLngBounds | null {
-  if (!network?.elements?.length) return null;
-
-  const providersById = new Map(network.providers.map((p) => [p.id, p.name]));
-
-  const b: LatLngBounds = {
-    minLat: Infinity,
-    maxLat: -Infinity,
-    minLng: Infinity,
-    maxLng: -Infinity,
-  };
-
-  for (const el of network.elements) {
-    if (!isRegionalDatasetElement(el, providersById)) continue;
-    addPath(b, el.path);
-    if (typeof el.lat === 'number' && typeof el.lng === 'number' && Number.isFinite(el.lat) && Number.isFinite(el.lng)) {
-      addPoint(b, el.lat, el.lng);
-    }
-  }
-
-  if (!Number.isFinite(b.minLat) || b.minLat === Infinity) return null;
-
-  return b;
-}
-
-export function boundsSpanDeg(bounds: LatLngBounds): { lat: number; lng: number } {
+export function padBounds(
+  bounds: LatLngBounds,
+  factor = 0.08,
+  minPadDeg = 0.05,
+): LatLngBounds {
+  const latSize = bounds.maxLat - bounds.minLat;
+  const lngSize = bounds.maxLng - bounds.minLng;
+  const latPad = Math.max(latSize * factor, minPadDeg);
+  const lngPad = Math.max(lngSize * factor, minPadDeg);
   return {
-    lat: Math.abs(bounds.maxLat - bounds.minLat),
-    lng: Math.abs(bounds.maxLng - bounds.minLng),
+    minLat: Math.max(-90, bounds.minLat - latPad),
+    minLng: Math.max(-180, bounds.minLng - lngPad),
+    maxLat: Math.min(90, bounds.maxLat + latPad),
+    maxLng: Math.min(180, bounds.maxLng + lngPad),
   };
-}
-
-/** Center of bounds (for rotating the globe). */
-export function centerOfBounds(bounds: LatLngBounds): LatLng {
-  return {
-    lat: (bounds.minLat + bounds.maxLat) / 2,
-    lng: (bounds.minLng + bounds.maxLng) / 2,
-  };
-}
-
-/** Expand zero/tiny boxes so Leaflet fitBounds is stable. */
-export function padBounds(bounds: LatLngBounds, padDeg = 0.015): LatLngBounds {
-  const latSpan = Math.abs(bounds.maxLat - bounds.minLat);
-  const lngSpan = Math.abs(bounds.maxLng - bounds.minLng);
-  const pLat = latSpan < 1e-6 ? padDeg : 0;
-  const pLng = lngSpan < 1e-6 ? padDeg : 0;
-  return {
-    minLat: bounds.minLat - pLat,
-    maxLat: bounds.maxLat + pLat,
-    minLng: bounds.minLng - pLng,
-    maxLng: bounds.maxLng + pLng,
-  };
-}
-
-/**
- * Choose bounds for initial map fit: prefer regional (Gold Coast + OSM); if missing, use full network only if not planet-wide.
- */
-export function selectBoundsForMapFocus(network: NetworkResponseDTO | null): LatLngBounds | null {
-  const regional = computeRegionalDataBounds(network);
-  if (regional) return regional;
-
-  const all = computeNetworkBounds(network);
-  if (!all) return null;
-
-  const { lat: latSpan, lng: lngSpan } = boundsSpanDeg(all);
-  // Above ~50° the view is more "whole hemisphere" than a region; skip auto-fit.
-  if (latSpan > 50 || lngSpan > 120) return null;
-
-  return all;
 }

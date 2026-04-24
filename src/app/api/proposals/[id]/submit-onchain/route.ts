@@ -1,9 +1,12 @@
+// HTTP API /api/proposals/[id]/submit-onchain — Next.js Route Handler.
+
 import { NextResponse } from 'next/server';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { createHash } from 'node:crypto';
 
 import { prisma } from '@/lib/prisma';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type Params = {
   params: Promise<{
@@ -88,7 +91,14 @@ export async function POST(req: Request, { params }: Params) {
 
   const proposal = await prisma.proposal.findUnique({
     where: { id },
-    select: { id: true, status: true, authorPubkey: true, scope: true, title: true, description: true },
+    select: {
+      id: true,
+      status: true,
+      authorPubkey: true,
+      scope: true,
+      title: true,
+      description: true,
+    },
   });
 
   if (!proposal) {
@@ -126,6 +136,10 @@ export async function POST(req: Request, { params }: Params) {
   const ok = nacl.sign.detached.verify(msgBytes, sigBytes, pkBytes);
   if (!ok) {
     return NextResponse.json({ error: 'signature invalid' }, { status: 401 });
+  }
+
+  if (await isUserBanned(proposal.authorPubkey)) {
+    return userBannedResponsePlain();
   }
 
   // Dev/stub behavior: we don't send real Anchor tx yet.

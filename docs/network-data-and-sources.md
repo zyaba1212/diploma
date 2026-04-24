@@ -30,11 +30,13 @@
 - **Магистрали:** наземные и **подводные (submarine)** ВОЛС, иногда спутники; на суше — ВОЛС/медь/радио.
 - **Оборудование (не исчерпывающе):** маршрутизаторы, L2/L3-коммутаторы, DWDM-мультиплексоры, OLT/ONT, модемы/трансиверы, **репитеры/регенераторы** на длинных ВОЛС, станции питания, дата-центры (серверы, стойки), базовые станции сотовой связи, антенны и т.д.
 
-В схеме Prisma сейчас упрощённый enum `NetworkElementType`:
+В схеме Prisma сейчас **минимальный** enum `NetworkElementType` (ровно **18** значений):
 
-`CABLE_COPPER`, `CABLE_FIBER`, `BASE_STATION`, `SATELLITE`, `EQUIPMENT`.
+- кабели: `CABLE_COPPER`, `CABLE_FIBER`, `CABLE_UNDERGROUND_COPPER`, `CABLE_UNDERGROUND_FIBER`;
+- узлы/оборудование: `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM`, `BASE_STATION`, `SATELLITE`, `EQUIPMENT`;
+- офлайн: `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE`.
 
-Это **не полная типизация** всего парка (отдельно DWDM, OLT, IX, CDN edge и т.д.) — осознанное упрощение для диплома. Детали можно класть в **`metadata` (JSON)** или расширять enum миграцией, если понадобится.
+Отдельные «топологические» и узкоспециализированные типы (BRAS, OLT, воздушный/внутриобъектный кабель и т.п.) **не** входят в enum — это осознанное упрощение. Детали предметной области можно класть в **`metadata` (JSON)** или расширять enum отдельной миграцией, если понадобится.
 
 ## 3. Официальные и открытые источники данных (для наполнения, не «вшито в код»)
 
@@ -55,12 +57,21 @@
 
 - URL по умолчанию: `cable/cable-geo.json` из того репозитория.
 - Переменная окружения **`SUBMARINE_CABLE_GEO_URL`** — подмена URL или локальный файл через **`--file path/to/cable-geo.json`**.
+- Для полей **`metadata.year`**, **`metadata.countries`**, опционально **`metadata.rfs`** и **`metadata.officialUrl`** (из поля `url` в `cable/<id>.json`, если это валидный `http(s)` URL) скрипт по умолчанию запрашивает у того же источника JSON **`cable/<id>.json`** по одному разу на каждый уникальный `id` кабеля (сотни HTTP-запросов при полном импорте; есть повтор при 429/503/502). База URL: **`SUBMARINE_CABLE_DETAIL_BASE_URL`** (по умолчанию каталог `.../main/cable/` в репозитории Steve Song). Отключить детали: флаг **`--no-details`** (только геометрия и базовые поля из GeoJSON).
+- В интерфейсе глобуса/2D блок «Источники» формируется для всех объектов (`cable` и `node`), если в данных есть валидные URL:
+  - **Сайт проекта / оператора** — из `metadata.officialUrl` (или родственных полей metadata, если присутствуют),
+  - **Источник провайдера** — из `NetworkProvider.sourceUrl` (если указан),
+  - **Ссылка на датасет/запись** — по типу/метаданным (например, `cable/<id>.json` в GitHub для OUCM, permalink в OpenStreetMap, страница датасета data.gov.au, Celestrak),
+  - **Поиск в Wikipedia (EN)** — для подводных кабелей как справочный поиск (не подтверждение трассы).
 - Идемпотентность: `sourceId` вида `oucm-<feature_id>` (при нескольких сегментах — суффикс `-s1`, `-s2`, …).
 - Провайдер в БД: `id = open-undersea-cable-map`, тип линии: `CABLE_FIBER`.
 
 ```bash
 # проверка без записи в БД
 node scripts/sync-submarine-cables.mjs --dry-run --limit 5
+
+# импорт без запросов cable/<id>.json (без года/стран в metadata)
+node scripts/sync-submarine-cables.mjs --no-details
 
 # полный импорт (нужен DATABASE_URL)
 npm run scripts:sync-cables
@@ -114,9 +125,41 @@ OSM Telecoms / теги: [Telecoms - OpenStreetMap Wiki](https://wiki.openstreet
 
 Ссылка на формат TLE: [Celestrak NORAD elements (gp.php)](https://celestrak.org/NORAD/elements/gp.php).
 
-### 4.5. Узлы сети (PROVIDER/SERVER/SWITCH/...) как инференс-позиции
+#### Бэкфилл SATCAT metadata (owner / launchDate / launchYear)
 
-Типы `PROVIDER`, `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM` в текущей реализации заполняются **инференсом**: позиции вычисляются из геометрии уже импортированных кабелей (`NetworkElement.path`), чтобы на глобусе были “узлы” для визуального слоя.
+Для старых спутниковых записей, где в `metadata` ещё нет `owner`/`launch*`, используется отдельный idempotent-бэкфилл:
+
+- скрипт: **`scripts/backfill-satellite-satcat-metadata.mjs`**
+- npm alias: **`npm run scripts:backfill-satellite-satcat-metadata`**
+- источник: Celestrak SATCAT (`records.php?CATNR=...&FORMAT=JSON`)
+
+Рекомендуемый rollout:
+
+1. Dry run на ограниченной выборке:
+   - `npm run scripts:backfill-satellite-satcat-metadata -- --dry-run --limit 100`
+2. Пробный запуск в малом батче:
+   - `npm run scripts:backfill-satellite-satcat-metadata -- --limit 300 --batch-size 60 --concurrency 4`
+3. Полный прогон:
+   - `npm run scripts:backfill-satellite-satcat-metadata -- --batch-size 120 --concurrency 6`
+
+Безопасные параметры по умолчанию:
+
+- `--batch-size 120`
+- `--concurrency 6`
+- `--max-retries 2`
+- `--retry-delay-ms 350`
+
+Поддерживаются env-переопределения:
+
+- `CELESTRAK_SATCAT_URL`
+- `CELESTRAK_SATCAT_TIMEOUT_MS`
+- `CELESTRAK_SATCAT_CONCURRENCY`
+
+Цель бэкфилла: сделать `owner/launch` доступными сразу в `GET /api/network`, без поздней догрузки в карточке.
+
+### 4.5. Узлы сети (SERVER/SWITCH/...) как инференс-позиции
+
+Типы `SERVER`, `SWITCH`, `MULTIPLEXER`, `DEMULTIPLEXER`, `REGENERATOR`, `MODEM` в текущей реализации заполняются **инференсом**: позиции вычисляются из геометрии уже импортированных кабелей (`NetworkElement.path`), чтобы на глобусе были “узлы” для визуального слоя.
 
 - скрипт: **`scripts/sync-derived-nodes-from-cables.mjs`**
 - заметка: это не прямой импорт конкретного оборудования (отдельного open-датасета с координатами для каждого типа в текущем проекте может не быть), поэтому в `metadata` сохраняется пометка `dataset: derived-from-cables` и список `derivedFromCableSourceIds`.

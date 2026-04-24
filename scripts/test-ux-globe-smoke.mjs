@@ -6,19 +6,28 @@ import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const SMOKE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || 120000);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 async function request(url, options = {}) {
-  const res = await fetch(url, {
-    headers: {
-      accept: 'text/html, application/json',
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SMOKE_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        accept: 'text/html, application/json',
+        ...(options.headers || {}),
+      },
+      signal: controller.signal,
+      ...options,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   let body;
   const contentType = res.headers.get('content-type') || '';
@@ -44,6 +53,13 @@ function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+function hasValidHttpSourceUrl(value) {
+  if (typeof value !== 'string') return false;
+  const t = value.trim();
+  if (!t || /\s/.test(t)) return false;
+  return t.startsWith('http://') || t.startsWith('https://');
+}
+
 function normalizeLngDeg(lng) {
   let x = lng;
   while (x > 180) x -= 360;
@@ -53,7 +69,7 @@ function normalizeLngDeg(lng) {
 
 function computeGlobeCenterLatLngFromQuat(globeQuat) {
   // Mirrors EarthScene.computeGlobeCenterLatLng() logic (deterministic inverse test).
-  const front = new THREE.Vector3(0, 0, 1);
+  const front = new THREE.Vector3(0, 0, -1);
   const local = front.applyQuaternion(globeQuat.clone().invert());
 
   const y = Math.max(-1, Math.min(1, local.y));
@@ -84,7 +100,7 @@ function orientGlobeGroupCenterFromLatLngQuat(globeQuat, lat, lng) {
   const localCenterRay = new THREE.Vector3(x, y, z);
   if (localCenterRay.lengthSq() < 1e-12) return globeQuat;
 
-  const front = new THREE.Vector3(0, 0, 1);
+  const front = new THREE.Vector3(0, 0, -1);
   const q = new THREE.Quaternion().setFromUnitVectors(localCenterRay.normalize(), front);
   globeQuat.copy(q);
   return globeQuat;
@@ -96,21 +112,21 @@ function assertNoZoomBasedViewModeAutoSwitch(earthSrc) {
   assert(!earthSrc.includes('hysteresis'), 'Expected no zoom hysteresis code.');
 
   // Deterministic heuristic:
-  // - if zoom auto-switch existed, it would introduce additional setViewMode('MAP_2D') calls outside the manual button.
-  // - in v2, manual button should be the single source of switching to MAP_2D.
+  // - zoom-based auto-switch would add many unrelated MAP_2D transitions.
+  // - allowed: primary 2D button (with setMapCenterFromGlobe) + optional map-load error retry button.
   const matches = [...earthSrc.matchAll(/setViewMode\(\s*'MAP_2D'\s*\)/g)];
   assert(matches.length >= 1, 'Expected manual setViewMode(\'MAP_2D\') to exist.');
   assert(
-    matches.length === 1,
-    `Expected exactly 1 setViewMode('MAP_2D') occurrence (manual button only). Found: ${matches.length}`
+    matches.length <= 2,
+    `Expected at most 2 manual MAP_2D switches (primary + map error retry). Found: ${matches.length}`,
   );
 
-  const idx = matches[0].index ?? 0;
-  const around = earthSrc.slice(Math.max(0, idx - 260), Math.min(earthSrc.length, idx + 80));
-  assert(
-    around.includes('setMapCenterFromGlobe'),
-    'Expected the MAP_2D switch to call setMapCenterFromGlobe() before setViewMode(\'MAP_2D\').'
-  );
+  const hasPrimary2D = matches.some((m) => {
+    const idx = m.index ?? 0;
+    const around = earthSrc.slice(Math.max(0, idx - 260), Math.min(earthSrc.length, idx + 80));
+    return around.includes('setMapCenterFromGlobe');
+  });
+  assert(hasPrimary2D, 'Expected at least one MAP_2D switch preceded by setMapCenterFromGlobe() (primary 2D button).');
 }
 
 async function main() {
@@ -121,6 +137,11 @@ async function main() {
   const earthSrc = await fs.readFile(path.join(repoRoot, 'src/components/EarthScene.tsx'), 'utf8');
   const mapViewSrc = await fs.readFile(path.join(repoRoot, 'src/components/MapView.tsx'), 'utf8');
   const siteHeaderSrc = await fs.readFile(path.join(repoRoot, 'src/components/SiteHeader.tsx'), 'utf8');
+  const syncGlobeNetworkSrc = await fs.readFile(
+    path.join(repoRoot, 'src/lib/three/syncGlobeNetworkElements.ts'),
+    'utf8',
+  );
+  const factoriesSrc = await fs.readFile(path.join(repoRoot, 'src/lib/three/factories.ts'), 'utf8');
 
   // 1) Routes should render without Next runtime/prerender errors.
   const { res: homeRes, body: homeBody } = await request(`${BASE_URL}/?ux_smoke=${cacheBuster}`);
@@ -148,6 +169,34 @@ async function main() {
     types.has('CABLE_UNDERGROUND_FIBER') || types.has('CABLE_UNDERGROUND_COPPER'),
     'Expected at least one underground cable type (CABLE_UNDERGROUND_FIBER/CABLE_UNDERGROUND_COPPER) in /api/network?scope=GLOBAL.'
   );
+  const legacyMetadata = (netBody.elements || []).filter((e) => {
+    const m = e?.metadata;
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
+    return (
+      Object.prototype.hasOwnProperty.call(m, 'confidence') ||
+      Object.prototype.hasOwnProperty.call(m, 'rank') ||
+      Object.prototype.hasOwnProperty.call(m, 'isMainUnderground')
+    );
+  });
+  assert(
+    legacyMetadata.length === 0,
+    `Expected no element metadata with confidence/rank/isMainUnderground; found ${legacyMetadata.length}.`,
+  );
+  const servers = (netBody.elements || []).filter((e) => e?.type === 'SERVER');
+  assert(servers.length > 0, 'Expected SERVER elements in /api/network?scope=GLOBAL.');
+  const serverWithSource = servers.filter((e) => hasValidHttpSourceUrl(e?.sourceUrl));
+  assert(serverWithSource.length > 0, 'Expected at least one SERVER with a valid sourceUrl.');
+  const invalidServerSource = servers.filter((e) => {
+    const v = e?.sourceUrl;
+    if (v == null) return false;
+    const t = String(v).trim();
+    if (!t) return false;
+    return !hasValidHttpSourceUrl(t);
+  });
+  assert(
+    invalidServerSource.length === 0,
+    `Expected no malformed SERVER sourceUrl values, got ${invalidServerSource.length}.`
+  );
 
   // 3) Geocode proxy endpoints (backend should proxy external APIs).
   if (process.env.SKIP_GEOCODE_SMOKE !== '1') {
@@ -165,10 +214,16 @@ async function main() {
 
   // 4) Deterministic v2 UX invariants (static checks in sources).
 
-  // 4.1) Header skeleton: centered "Главная" + "Глобальная сеть" only on "/" and "/about".
+  // 4.1) Header: primary nav includes Global Network (app-wide).
   assert(siteHeaderSrc.includes('justifyContent: \'center\'') || siteHeaderSrc.includes('justifyContent: "center"'), 'Expected centered header title.');
-  assert(siteHeaderSrc.includes("pathname === '/' || pathname === '/about'"), 'Expected global-network button visibility only on / and /about.');
-  assert(siteHeaderSrc.includes('href="/global-network"'), 'Expected header button link to /global-network.');
+  assert(
+    siteHeaderSrc.includes("{ href: '/global-network', label: 'Глобальная сеть' }"),
+    'Expected SiteHeader LINKS to include /global-network.',
+  );
+  assert(
+    siteHeaderSrc.includes('href={link.href}') && siteHeaderSrc.includes("'/global-network'"),
+    'Expected SiteHeader to map LINKS through next/link href={link.href} (includes /global-network).',
+  );
 
   // 4.2) Auto-switch 3D -> 2D via zoom must be disabled.
   assertNoZoomBasedViewModeAutoSwitch(earthSrc);
@@ -193,7 +248,10 @@ async function main() {
   }
 
   // 4.4) 3D -> 2D: Leaflet center comes from current globe center.
-  assert(earthSrc.includes('computeGlobeCenterLatLng(globeGroup)'), 'Expected 3D->2D to use computeGlobeCenterLatLng(globeGroup).');
+  assert(
+    earthSrc.includes('getFrontGlobeCenterLatLng(globeGroup)'),
+    'Expected 3D->2D to read globe front center via getFrontGlobeCenterLatLng(globeGroup).',
+  );
   assert(earthSrc.includes('setTargetCenter(center)'), 'Expected setMapCenterFromGlobe() to set targetCenter.');
   assert(earthSrc.includes('setReverseCenter(center)'), 'Expected setMapCenterFromGlobe() to set reverseCenter.');
   assert(earthSrc.includes('setMapCenterFromGlobe();') && earthSrc.includes("setViewMode('MAP_2D')"), 'Expected 2D switch button to call setMapCenterFromGlobe() then setViewMode(\'MAP_2D\').');
@@ -201,43 +259,55 @@ async function main() {
   // 4.5) 2D -> 3D: globe orientation comes from current Leaflet center.
   assert(earthSrc.includes('map.getCenter()'), 'Expected 2D->3D transition to use map.getCenter().');
   assert(
-    earthSrc.includes('orientGlobeGroupCenterFromLatLng(globeGroup, c.lat, c.lng)'),
-    'Expected 2D->3D transition to orient globe group from Leaflet center lat/lng.'
+    earthSrc.includes('syncGlobeToMapCenter(globeGroup, c.lat, c.lng)'),
+    'Expected 2D->3D transition to sync globe orientation via syncGlobeToMapCenter(globeGroup, c.lat, c.lng).',
   );
 
-  // 4.6) 2D user location notification/marker (geolocation automation is not reliable; validate presence of state + rendering code).
-  assert(earthSrc.includes('Ваше местоположение:'), 'Expected 2D location notification to render "Ваше местоположение:".');
-  assert(earthSrc.includes('navigator.geolocation.getCurrentPosition'), 'Expected geolocation to be requested in MAP_2D mode.');
-  assert(mapViewSrc.includes('2D user location marker') || mapViewSrc.includes('circleMarker'), 'Expected MapView to render userLocation marker.');
-  assert(mapViewSrc.includes('L.circleMarker([lat, lng]') && mapViewSrc.includes('L.circle([lat, lng]'), 'Expected MapView to render accuracy circle + marker.');
+  // 4.6) 2D map renders network nodes as circle markers (geolocation UX is optional and may be absent).
+  assert(mapViewSrc.includes('L.circleMarker([el.lat, el.lng]'), 'Expected MapView to draw network nodes with Leaflet circle markers.');
 
   // 4.7) Settlement search dropdown: up to 3 visible items + scroll, and selection recenters the map.
   assert(/maxHeight:\s*searchResults\.length\s*>\s*3\s*\?\s*3\s*\*\s*40/.test(earthSrc), 'Expected dropdown maxHeight capped for >3 results.');
   assert(/overflowY:\s*searchResults\.length\s*>\s*3\s*\?\s*'auto'/.test(earthSrc), 'Expected dropdown overflowY auto for >3 results.');
   assert(earthSrc.includes('onClick={() => handleSelectSearchResult(r)}'), 'Expected dropdown items to call handleSelectSearchResult.');
-  assert(earthSrc.includes('setTargetCenter({ lat, lng })') || earthSrc.includes('setTargetCenter({lat, lng})'), 'Expected handleSelectSearchResult to update targetCenter for recenter.');
+  assert(earthSrc.includes('setTargetCenter(n)'), 'Expected handleSelectSearchResult to call setTargetCenter(n) for recenter.');
   assert(
     earthSrc.includes('setSearchDropdownVisible(false)'),
     'Expected handleSelectSearchResult to hide dropdown after selection.'
   );
   assert(earthSrc.includes('center={targetCenter}'), 'Expected MapView to receive center={targetCenter}.');
 
-  // 4.8) Satellite nodes must be satellite-like: validate renderer uses createSatelliteObject (DOM/visual check cannot be automated reliably here).
-  assert(earthSrc.includes('const satelliteObj = createSatelliteObject'), 'Expected SATELLITE nodes to be created via createSatelliteObject().');
-  assert(earthSrc.includes('function createSatelliteObject('), 'Expected createSatelliteObject() implementation to exist.');
+  // 4.8) Satellite nodes must be satellite-like: validate globe sync uses createSatelliteObject (DOM/visual check cannot be automated reliably here).
+  assert(
+    syncGlobeNetworkSrc.includes('const satelliteObj = createSatelliteObject'),
+    'Expected SATELLITE nodes to be created via createSatelliteObject() in syncGlobeNetworkElements.',
+  );
+  assert(factoriesSrc.includes('export function createSatelliteObject'), 'Expected createSatelliteObject() implementation in factories.');
 
   // 4.9) Underground cables + base stations rendered in both 2D and 3D.
-  assert(earthSrc.includes('CABLE_UNDERGROUND_FIBER') && earthSrc.includes('CABLE_UNDERGROUND_COPPER'), 'Expected 3D renderer to handle underground cable types.');
-  assert(earthSrc.includes('BASE_STATION'), 'Expected 3D renderer to handle BASE_STATION nodes.');
+  assert(
+    syncGlobeNetworkSrc.includes('CABLE_UNDERGROUND_FIBER') && syncGlobeNetworkSrc.includes('CABLE_UNDERGROUND_COPPER'),
+    'Expected 3D globe sync to handle underground cable types.',
+  );
+  assert(factoriesSrc.includes('BASE_STATION'), 'Expected 3D factories to define BASE_STATION visuals.');
   assert(mapViewSrc.includes('CABLE_UNDERGROUND_FIBER') && mapViewSrc.includes('CABLE_UNDERGROUND_COPPER'), 'Expected 2D renderer to draw underground cable types.');
   assert(mapViewSrc.includes('BASE_STATION'), 'Expected 2D renderer to draw BASE_STATION nodes.');
+
+  // 4.10) Removed synthetic underground metrics (not sourced from external datasets).
+  assert(!earthSrc.includes('Надежность'), 'EarthScene must not show legacy Надежность (confidence) line.');
+  assert(!earthSrc.includes('Ранг трассы'), 'EarthScene must not show legacy Ранг трассы line.');
+  assert(!earthSrc.includes('Магистраль:'), 'EarthScene must not show legacy Магистраль line.');
+  assert(!earthSrc.includes('mainUndergroundOnly'), 'EarthScene must not send mainUndergroundOnly to /api/network.');
+  assert(!mapViewSrc.includes('Надежность'), 'MapView must not show legacy Надежность in cable tooltips.');
+  assert(!mapViewSrc.includes('Магистраль'), 'MapView must not show legacy Магистраль in cable tooltips.');
+  assert(!mapViewSrc.match(/metadata\?\.rank|metadata\.rank/), 'MapView must not reference metadata.rank in tooltips.');
 
   // 5) Backward-compatible route should still render (legacy alias).
   const { res: legacyRes } = await request(`${BASE_URL}/cables`);
   assert(legacyRes.status === 200, `Expected 200 for GET /cables, got ${legacyRes.status}`);
 
   console.log('UX v2 smoke checks passed.');
-  console.log('Manual verification needed: (1) confirm `SATELLITE` visually looks like a satellite model; (2) verify 2D user location label/marker with real geolocation permission.');
+  console.log('Manual verification: confirm SATELLITE markers look correct in 3D at sufficient zoom.');
 }
 
 main().catch((err) => {

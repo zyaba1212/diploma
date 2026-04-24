@@ -1,13 +1,16 @@
 'use client';
+// Страница /networks/[id] — UI Next.js App Router.
+
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import Link from 'next/link';
 import { EQUIPMENT_FACTORIES, NODE_VISUALS, CABLE_COLORS, TYPE_LABELS_RU, createSatelliteObject } from '@/lib/three/factories';
 import { latLngToVec3, orientGlobeGroupCenterFromLatLng, makeTextMesh, disposeThreeObject, computeGlobeCenterLatLng } from '@/lib/three/utils';
+import { attachGlobeTrackballControls } from '@/lib/three/globeTrackballControls';
 import { WORLD_LABELS } from '@/lib/three/labels';
 import { getEarthMaterialMode, getEarthSphereSegments } from '@/lib/earthQuality';
 import { loadEarthTextures } from '@/lib/loadEarthTextures';
@@ -19,6 +22,9 @@ import {
   type GlobeLabelCandidate,
 } from '@/lib/three/globeAppearance';
 import { Button } from '@/components/ui/Button';
+import { colors } from '@/theme/colors';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
+import { foldProposalActionsForDisplay } from '@/lib/stage7/proposalActionFold';
 import type L from 'leaflet';
 
 type ViewMode = 'GLOBE_3D' | 'MAP_2D';
@@ -35,7 +41,9 @@ type ProposalData = {
 };
 
 type ActionData = {
+  id: string;
   actionType: string;
+  targetElementId?: string | null;
   elementPayload: Record<string, unknown>;
 };
 
@@ -51,9 +59,11 @@ function isCableType(t: string) {
 
 export default function ProposalViewPage() {
   const params = useParams();
-  const id = typeof params.id === 'string' ? params.id : '';
+  const router = useRouter();
+  const id = typeof params?.id === 'string' ? params.id : '';
   const { publicKey, signMessage } = useWallet();
   const pubkey = publicKey?.toBase58() ?? '';
+  const sessionVerified = useSessionVerified();
 
   const [proposal, setProposal] = useState<ProposalData | null>(null);
   const [tally, setTally] = useState<VoteTally | null>(null);
@@ -63,6 +73,9 @@ export default function ProposalViewPage() {
   const [voting, setVoting] = useState(false);
   const [voteError, setVoteError] = useState<string | null>(null);
   const [authorName, setAuthorName] = useState<string>('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -83,6 +96,7 @@ export default function ProposalViewPage() {
     lat: GLOBE_DEFAULT_CENTER.lat,
     lng: GLOBE_DEFAULT_CENTER.lng,
   });
+  const map2DZoom12FromGlobeRef = useRef(false);
 
   const labelCandidatesRef = useRef<GlobeLabelCandidate[]>([]);
 
@@ -140,7 +154,7 @@ export default function ProposalViewPage() {
   }, [viewMode]);
 
   const handleVote = useCallback(async (voteType: 'FOR' | 'AGAINST') => {
-    if (!publicKey || !signMessage || !id) return;
+    if (!publicKey || !signMessage || !id || !sessionVerified) return;
     setVoting(true); setVoteError(null);
     try {
       const message = `diploma-z96a vote:${id}:${voteType.toLowerCase()}`;
@@ -158,11 +172,19 @@ export default function ProposalViewPage() {
     } catch (e: unknown) {
       setVoteError(e instanceof Error ? e.message : 'Ошибка');
     } finally { setVoting(false); }
-  }, [publicKey, signMessage, id, pubkey]);
+  }, [publicKey, signMessage, id, pubkey, sessionVerified]);
 
-  const proposalElements = proposal?.actions
-    .filter(a => a.actionType === 'CREATE' && a.elementPayload)
-    .map(a => a.elementPayload) ?? [];
+  const proposalElements =
+    proposal?.actions?.length ?
+      foldProposalActionsForDisplay(
+        proposal.actions.map(a => ({
+          id: a.id,
+          actionType: a.actionType,
+          targetElementId: a.targetElementId,
+          elementPayload: a.elementPayload,
+        })),
+      )
+    : [];
 
   const getGlobeCenterLatLng = useCallback((): { lat: number; lng: number } => {
     if (globeGroupRef.current) {
@@ -178,6 +200,7 @@ export default function ProposalViewPage() {
     if (target === viewMode) return;
     if (target === 'MAP_2D') {
       savedCenterRef.current = getGlobeCenterLatLng();
+      map2DZoom12FromGlobeRef.current = true;
       setViewMode('MAP_2D');
       threeInitRef.current = false;
     } else {
@@ -295,15 +318,16 @@ export default function ProposalViewPage() {
 
         let altitudeKm = 0;
         if (typeof el.altitude === 'number' && Number.isFinite(el.altitude as number)) altitudeKm = el.altitude as number;
-        else if (type === 'SATELLITE') altitudeKm = 550;
-        const nodeR = type === 'SATELLITE' ? 1.0 + altitudeKm / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
+        else if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') altitudeKm = 550;
+        const nodeR =
+          type === 'SATELLITE' || type === 'SATELLITE_RASSVET' ? 1.0 + altitudeKm / 6371 : 1.012 + (visual.size - 0.01) * 0.9;
 
         const pos = latLngToVec3(el.lat as number, el.lng as number, nodeR);
         if (!pos) continue;
         const normal = pos.clone().normalize();
 
         let marker: THREE.Object3D;
-        if (type === 'SATELLITE') {
+        if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') {
           marker = createSatelliteObject(visual.size, visual.color, visual.emissive);
         } else {
           const factory = EQUIPMENT_FACTORIES[type];
@@ -335,60 +359,27 @@ export default function ProposalViewPage() {
       labelCandidatesRef.current.push({ sprite: mesh, latRad, lngRad, sinLat: Math.sin(latRad), cosLat: Math.cos(latRad) });
     }
 
-    let dragging = false, prevX = 0, prevY = 0;
-    const onPointerDown = (e: PointerEvent) => { if (e.pointerType === 'touch') return; dragging = true; prevX = e.clientX; prevY = e.clientY; };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!dragging || e.pointerType === 'touch') return;
-      const dx = e.clientX - prevX, dy = e.clientY - prevY;
-      prevX = e.clientX; prevY = e.clientY;
-      globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.005));
-      globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.005));
-    };
-    const onPointerUp = (e: PointerEvent) => { if (e.pointerType === 'touch') return; dragging = false; };
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      zoomLevelRef.current = Math.max(1.2, Math.min(6, zoomLevelRef.current + (e.deltaY > 0 ? 0.15 : -0.15)));
-      camera.position.z = zoomLevelRef.current;
-    };
-
-    // Touch controls
-    let touchStartDist = 0;
-    let touchPrevX = 0, touchPrevY = 0;
-    const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        touchPrevX = e.touches[0].clientX;
-        touchPrevY = e.touches[0].clientY;
-      } else if (e.touches.length === 2) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        touchStartDist = Math.sqrt(dx * dx + dy * dy);
-      }
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      e.preventDefault();
-      if (e.touches.length === 1) {
-        const dx = e.touches[0].clientX - touchPrevX;
-        const dy = e.touches[0].clientY - touchPrevY;
-        touchPrevX = e.touches[0].clientX;
-        touchPrevY = e.touches[0].clientY;
-        globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.005));
-        globeGroup.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.005));
-      } else if (e.touches.length === 2) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const delta = (touchStartDist - dist) * 0.01;
-        zoomLevelRef.current = Math.max(1.2, Math.min(6, zoomLevelRef.current + delta));
-        camera.position.z = zoomLevelRef.current;
-        touchStartDist = dist;
-      }
-    };
+    const globeEarthMesh = globeGroup.children[0] as THREE.Mesh;
+    const trackball = attachGlobeTrackballControls({
+      domElement: renderer.domElement,
+      globeGroup,
+      globeMesh: globeEarthMesh,
+      camera,
+      zoomMin: 1.2,
+      zoomMax: 6,
+      onZoomApplied: (z) => {
+        zoomLevelRef.current = z;
+      },
+    });
 
     // Tooltip
     const tooltipDiv = document.createElement('div');
-    tooltipDiv.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;display:none;background:rgba(10,20,45,0.95);border:1px solid rgba(120,160,255,0.3);border-radius:8px;padding:6px 12px;font-size:12px;color:#eaf2ff;max-width:240px;backdrop-filter:blur(6px)';
+    tooltipDiv.style.cssText =
+      'position:fixed;z-index:9999;pointer-events:none;display:none;background:rgba(10,20,45,0.95);border:1px solid rgba(120,160,255,0.3);border-radius:8px;padding:6px 12px;font-size:12px;color:#eaf2ff;max-width:240px;backdrop-filter:blur(6px)';
     document.body.appendChild(tooltipDiv);
     const raycaster = new THREE.Raycaster();
+    raycaster.params.Line = { threshold: 0.012 };
+    const camPos = new THREE.Vector3();
     const onMouseMove = (e: MouseEvent) => {
       const rect = mount.getBoundingClientRect();
       const mouse = new THREE.Vector2(
@@ -396,30 +387,36 @@ export default function ProposalViewPage() {
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       );
       raycaster.setFromCamera(mouse, camera);
+      camera.getWorldPosition(camPos);
       const hits = raycaster.intersectObjects(networkGroup.children, true);
-      if (hits.length > 0) {
-        let obj = hits[0].object;
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object;
+        if (obj.userData?.__worldLabel) continue;
         while (obj && !obj.userData?.elType && obj.parent && obj.parent !== networkGroup) obj = obj.parent;
-        if (obj?.userData?.elType) {
-          const t = obj.userData.elType as string;
-          const label = TYPE_LABELS_RU[t] || t;
-          const name = obj.userData.elName || '';
-          tooltipDiv.innerHTML = `<b>${label}</b>${name ? `<br/>${name}` : ''}`;
-          tooltipDiv.style.display = 'block';
-          tooltipDiv.style.left = `${e.clientX + 12}px`;
-          tooltipDiv.style.top = `${e.clientY + 12}px`;
-          return;
+        if (!obj?.userData?.elType) continue;
+
+        const isLine =
+          hit.object instanceof THREE.Line ||
+          hit.object instanceof THREE.LineLoop ||
+          hit.object instanceof THREE.LineSegments;
+        if (isLine) {
+          const p = hit.point.clone().normalize();
+          const v = camPos.clone().normalize();
+          if (p.dot(v) < 0.12) continue;
         }
+
+        const t = obj.userData.elType as string;
+        const label = TYPE_LABELS_RU[t] || t;
+        const name = obj.userData.elName || '';
+        tooltipDiv.innerHTML = `<b>${label}</b>${name ? `<br/>${name}` : ''}`;
+        tooltipDiv.style.display = 'block';
+        tooltipDiv.style.left = `${e.clientX + 12}px`;
+        tooltipDiv.style.top = `${e.clientY + 12}px`;
+        return;
       }
       tooltipDiv.style.display = 'none';
     };
 
-    mount.addEventListener('pointerdown', onPointerDown);
-    mount.addEventListener('pointermove', onPointerMove);
-    mount.addEventListener('pointerup', onPointerUp);
-    mount.addEventListener('wheel', onWheel, { passive: false });
-    mount.addEventListener('touchstart', onTouchStart, { passive: true });
-    mount.addEventListener('touchmove', onTouchMove, { passive: false });
     mount.addEventListener('mousemove', onMouseMove);
 
     const animate = () => {
@@ -434,12 +431,7 @@ export default function ProposalViewPage() {
 
     return () => {
       cancelAnimationFrame(animFrameRef.current);
-      mount.removeEventListener('pointerdown', onPointerDown);
-      mount.removeEventListener('pointermove', onPointerMove);
-      mount.removeEventListener('pointerup', onPointerUp);
-      mount.removeEventListener('wheel', onWheel);
-      mount.removeEventListener('touchstart', onTouchStart);
-      mount.removeEventListener('touchmove', onTouchMove);
+      trackball.detach();
       mount.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('resize', onResize);
       if (tooltipDiv.parentNode) tooltipDiv.parentNode.removeChild(tooltipDiv);
@@ -466,12 +458,22 @@ export default function ProposalViewPage() {
       if (cancelled || !mapContainerRef.current) return;
 
       const initCenter = savedCenterRef.current;
-      const map = L.map(mapContainerRef.current, { center: [initCenter.lat, initCenter.lng], zoom: 6, zoomControl: false });
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 18 }).addTo(map);
+      const map = L.map(mapContainerRef.current, {
+        center: [initCenter.lat, initCenter.lng],
+        zoom: 6,
+        zoomControl: false,
+        attributionControl: false,
+      });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '', maxZoom: 18 }).addTo(map);
       mapInstanceRef.current = map;
 
       map.whenReady(() => {
         map.invalidateSize();
+        if (map2DZoom12FromGlobeRef.current) {
+          const c = savedCenterRef.current;
+          map.setView([c.lat, c.lng], 12);
+          map2DZoom12FromGlobeRef.current = false;
+        }
 
         for (const el of proposalElements) {
           const type = el.type as string;
@@ -487,7 +489,7 @@ export default function ProposalViewPage() {
           } else if (typeof el.lat === 'number' && typeof el.lng === 'number') {
             const v = NODE_VISUALS[type];
             const c = v ? '#' + v.color.toString(16).padStart(6, '0') : '#ff9900';
-            if (type === 'SATELLITE') {
+            if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') {
               L.circleMarker([el.lat as number, el.lng as number], {
                 radius: 5, color: c, fillColor: c, fillOpacity: 0.7, weight: 1,
               }).addTo(map)
@@ -590,7 +592,8 @@ export default function ProposalViewPage() {
             display: flex !important; flex-direction: column !important; overflow-y: auto !important;
           }
           .proposal-sheet-handle { display: block !important; width: 40px; height: 4px; margin: 0 auto 12px; border-radius: 4px; background: rgba(160,170,200,0.45); flex-shrink: 0; }
-          .pv-nav-block { bottom: auto !important; top: 70px !important; right: 12px !important; left: auto !important; }
+          .pv-nav-block { bottom: calc(52px + env(safe-area-inset-bottom, 0px)) !important; top: auto !important; right: 12px !important; left: auto !important; }
+          .pv-zoom-block { bottom: calc(52px + env(safe-area-inset-bottom, 0px)) !important; left: 12px !important; }
           .pv-search-block { right: 12px !important; left: auto !important; top: 12px !important; width: 200px !important; }
         }
       `}</style>
@@ -630,15 +633,39 @@ export default function ProposalViewPage() {
         {searchLoading && <span style={{ position: 'absolute', right: 8, top: 7, fontSize: 10, color: 'var(--muted)' }}>...</span>}
       </div>
 
-      {/* Zoom controls */}
-      <div style={{ position: 'absolute', bottom: 20, left: 12, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {/* Zoom controls — горизонтально, выше оверлея Next.js (N) в dev */}
+      <div
+        className="pv-zoom-block"
+        style={{
+          position: 'absolute',
+          bottom: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+          left: 12,
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'row',
+          gap: 4,
+        }}
+      >
         <button onClick={() => handleZoom(1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(120,160,255,0.2)', background: 'rgba(10,20,40,0.9)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>+</button>
         <button onClick={() => handleZoom(-1)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(120,160,255,0.2)', background: 'rgba(10,20,40,0.9)', color: '#fff', fontSize: 18, cursor: 'pointer' }}>&minus;</button>
       </div>
 
-      {/* Navigation arrows (2D only) */}
+      {/* Navigation arrows (2D only) — справа снизу */}
       {viewMode === 'MAP_2D' && (
-        <div className="pv-nav-block" style={{ position: 'absolute', bottom: 20, left: 56, zIndex: 1000, display: 'grid', gridTemplateColumns: 'repeat(3, 32px)', gridTemplateRows: 'repeat(3, 32px)', gap: 2 }}>
+        <div
+          className="pv-nav-block"
+          style={{
+            position: 'absolute',
+            bottom: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+            right: 12,
+            left: 'auto',
+            zIndex: 1000,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 32px)',
+            gridTemplateRows: 'repeat(3, 32px)',
+            gap: 2,
+          }}
+        >
           {(['up-left','up','up-right','left','','right','down-left','down','down-right'] as const).map((dir, i) => (
             dir === '' ? <div key={i} /> :
             <button key={dir} onClick={() => handleNavigate(dir)} style={{
@@ -659,62 +686,151 @@ export default function ProposalViewPage() {
         style={{
           position: 'absolute', right: 12, top: 64, zIndex: 1000,
           width: 320, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
-          background: 'rgba(10,20,40,0.92)', border: '1px solid rgba(120,160,255,0.2)',
-          borderRadius: 14, padding: '18px 20px', backdropFilter: 'blur(8px)',
+          background: colors.bg.card, border: `1px solid ${colors.border}`,
+          borderRadius: 4, padding: '16px 16px',
           pointerEvents: 'auto',
         }}
       >
         <div className="proposal-sheet-handle" aria-hidden />
-        <Link href="/networks" style={{ fontSize: 12, color: '#8ab4f8', textDecoration: 'none', marginBottom: 8, display: 'inline-block' }}>
-          &larr; Все предложения
-        </Link>
+        <button
+          type="button"
+          onClick={() => setIsDetailsOpen(prev => !prev)}
+          aria-expanded={isDetailsOpen}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            marginBottom: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid rgba(120,160,255,0.16)',
+            background: 'rgba(255,255,255,0.04)',
+            cursor: 'pointer',
+          }}
+        >
+          <span>{isDetailsOpen ? 'Скрыть детали предложения' : 'Показать детали предложения'}</span>
+          <span aria-hidden>{isDetailsOpen ? '▾' : '▸'}</span>
+        </button>
 
-        <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', margin: '8px 0 4px' }}>
-          {proposal.title || 'Без названия'}
-        </h2>
+        {isDetailsOpen && (
+          <>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', margin: '8px 0 4px' }}>
+              {proposal.title || 'Без названия'}
+            </h2>
 
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-          {authorName || proposal.authorPubkey.slice(0, 8) + '...'}
-          {' · '}
-          {new Date(proposal.createdAt).toLocaleDateString('ru-RU')}
-          {' · '}
-          <span style={{ color: statusColor }}>{proposal.status}</span>
-        </div>
-
-        {proposal.description && (
-          <p style={{ fontSize: 13, color: 'rgba(200,220,255,0.8)', lineHeight: 1.5, marginBottom: 10 }}>
-            {proposal.description}
-          </p>
-        )}
-
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-          Узлов: {nodeCount} · Кабелей: {cableCount}
-        </div>
-
-        {/* Vote bar */}
-        {tally && (
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 4 }}>
-              <span style={{ color: '#3ddc97' }}>За: {tally.for}</span>
-              <span style={{ color: '#ff6b6b' }}>Против: {tally.against}</span>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+              {authorName || proposal.authorPubkey.slice(0, 8) + '...'}
+              {' · '}
+              {new Date(proposal.createdAt).toLocaleDateString('ru-RU')}
+              {' · '}
+              <span style={{ color: statusColor }}>{proposal.status}</span>
             </div>
-            <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-              {tally.total > 0 && (
-                <div style={{ height: '100%', width: `${(tally.for / tally.total) * 100}%`, background: '#3ddc97', borderRadius: 2 }} />
-              )}
-            </div>
-            {timeRemaining && <div style={{ fontSize: 11, color: '#f6c177', marginTop: 4 }}>{timeRemaining}</div>}
-          </div>
-        )}
 
-        {proposal.status === 'SUBMITTED' && publicKey && (!tally || tally.userVote === null) && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            <Button onClick={() => handleVote('FOR')} disabled={voting}>За</Button>
-            <Button onClick={() => handleVote('AGAINST')} disabled={voting}>Против</Button>
-          </div>
+            {proposal.description && (
+              <p style={{ fontSize: 13, color: colors.text.secondary, lineHeight: 1.5, marginBottom: 10 }}>
+                {proposal.description}
+              </p>
+            )}
+
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+              Узлов: {nodeCount} · Кабелей: {cableCount}
+            </div>
+
+            {/* Vote bar */}
+            {tally && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: '#3ddc97' }}>За: {tally.for}</span>
+                  <span style={{ color: '#ff6b6b' }}>Против: {tally.against}</span>
+                </div>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                  {tally.total > 0 && (
+                    <div style={{ height: '100%', width: `${(tally.for / tally.total) * 100}%`, background: '#3ddc97', borderRadius: 2 }} />
+                  )}
+                </div>
+                {timeRemaining && <div style={{ fontSize: 11, color: '#f6c177', marginTop: 4 }}>{timeRemaining}</div>}
+              </div>
+            )}
+
+            {proposal.status === 'SUBMITTED' && publicKey && (!tally || tally.userVote === null) && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                <Button onClick={() => handleVote('FOR')} disabled={voting || !sessionVerified}>
+                  За
+                </Button>
+                <Button onClick={() => handleVote('AGAINST')} disabled={voting || !sessionVerified}>
+                  Против
+                </Button>
+              </div>
+            )}
+            {voteError && <p style={{ fontSize: 11, color: '#ff6b6b' }}>{voteError}</p>}
+            {tally?.userVote && <p style={{ fontSize: 11, color: '#3ddc97' }}>Вы проголосовали: {tally.userVote === 'FOR' ? 'За' : 'Против'}</p>}
+
+            {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                <Link
+                  href={`/propose?open=${encodeURIComponent(proposal.id)}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: '1px solid var(--border)',
+                    background: 'rgba(255,255,255,0.06)',
+                    color: 'var(--text)',
+                    fontSize: 13,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Редактировать
+                </Link>
+                <Button type="button" onClick={async () => {
+                  if (!proposal) return;
+                  if (!sessionVerified) {
+                    setDeleteErr('Нажмите «Авторизоваться» в шапке и подпишите запрос в кошельке.');
+                    return;
+                  }
+                  if (!signMessage) {
+                    setDeleteErr('Кошелёк не поддерживает подпись сообщений.');
+                    return;
+                  }
+                  if (!window.confirm('Удалить предложение безвозвратно?')) return;
+                  setDeleteBusy(true);
+                  setDeleteErr(null);
+                  try {
+                    const message = `diploma-z96a propose:delete:${proposal.id}`;
+                    const sigBytes = await signMessage(new TextEncoder().encode(message));
+                    const res = await fetch(`/api/proposals/${proposal.id}`, {
+                      method: 'DELETE',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ authorPubkey: pubkey, signature: bs58.encode(sigBytes) }),
+                    });
+                    if (!res.ok) {
+                      const d = (await res.json().catch(() => ({}))) as { error?: string };
+                      throw new Error(d.error || `HTTP ${res.status}`);
+                    }
+                    router.push('/networks');
+                  } catch (e: unknown) {
+                    setDeleteErr(e instanceof Error ? e.message : 'Ошибка удаления');
+                  } finally {
+                    setDeleteBusy(false);
+                  }
+                }} disabled={deleteBusy || !sessionVerified || !signMessage}>
+                  {deleteBusy ? 'Удаление…' : 'Удалить сеть'}
+                </Button>
+              </div>
+            )}
+            {pubkey && proposal.authorPubkey === pubkey && !['ACCEPTED', 'APPLIED'].includes(proposal.status) && !sessionVerified && (
+              <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                Чтобы удалить предложение, сначала нажмите «Авторизоваться» в шапке сайта.
+              </p>
+            )}
+            {deleteErr && <p style={{ fontSize: 11, color: '#ff6b6b', marginTop: 6 }}>{deleteErr}</p>}
+          </>
         )}
-        {voteError && <p style={{ fontSize: 11, color: '#ff6b6b' }}>{voteError}</p>}
-        {tally?.userVote && <p style={{ fontSize: 11, color: '#3ddc97' }}>Вы проголосовали: {tally.userVote === 'FOR' ? 'За' : 'Против'}</p>}
 
         {/* View toggle */}
         <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
@@ -723,23 +839,25 @@ export default function ProposalViewPage() {
         </div>
 
         {/* Element list */}
-        <div style={{ marginTop: 12, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Элементы:</div>
-          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-            {proposalElements.slice(0, 50).map((el, i) => {
-              const type = el.type as string;
-              const isCbl = isCableType(type);
-              const c = isCbl ? (CABLE_COLORS[type] || '#ccc') : (NODE_VISUALS[type] ? '#' + NODE_VISUALS[type].color.toString(16).padStart(6, '0') : '#ccc');
-              return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 11, color: 'var(--muted)' }}>
-                  <span style={{ width: isCbl ? 12 : 8, height: isCbl ? 4 : 8, borderRadius: isCbl ? 1 : '50%', background: c, flexShrink: 0 }} />
-                  {TYPE_LABELS_RU[type] || type}: {(el.name as string) || '—'}
-                </div>
-              );
-            })}
-            {proposalElements.length > 50 && <div style={{ fontSize: 11, color: 'var(--muted)' }}>+{proposalElements.length - 50} ещё</div>}
+        {isDetailsOpen && (
+          <div style={{ marginTop: 12, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>Элементы:</div>
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {proposalElements.slice(0, 50).map((el, i) => {
+                const type = el.type as string;
+                const isCbl = isCableType(type);
+                const c = isCbl ? (CABLE_COLORS[type] || '#ccc') : (NODE_VISUALS[type] ? '#' + NODE_VISUALS[type].color.toString(16).padStart(6, '0') : '#ccc');
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 11, color: 'var(--muted)' }}>
+                    <span style={{ width: isCbl ? 12 : 8, height: isCbl ? 4 : 8, borderRadius: isCbl ? 1 : '50%', background: c, flexShrink: 0 }} />
+                    {TYPE_LABELS_RU[type] || type}: {(el.name as string) || '—'}
+                  </div>
+                );
+              })}
+              {proposalElements.length > 50 && <div style={{ fontSize: 11, color: 'var(--muted)' }}>+{proposalElements.length - 50} ещё</div>}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

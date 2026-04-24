@@ -1,3 +1,5 @@
+// HTTP API /api/proposals/[id]/submit — Next.js Route Handler.
+
 import { NextResponse } from 'next/server';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
@@ -9,6 +11,7 @@ import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 import { logApiMetric } from '@/lib/apiOps';
 import { internalApiError } from '@/lib/apiError';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type Params = {
   params: Promise<{
@@ -239,6 +242,10 @@ export async function POST(req: Request, { params }: Params) {
   const ok = nacl.sign.detached.verify(msgBytes, sigBytes, pkBytes);
   if (!ok) {
     return NextResponse.json({ error: 'signature invalid' }, { status: 400 });
+  }
+
+  if (await isUserBanned(proposal.authorPubkey)) {
+    return userBannedResponsePlain();
   }
 
   // If it is already submitted on-chain, don't re-submit; still validated signature above.

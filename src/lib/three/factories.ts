@@ -1,3 +1,5 @@
+// three/factories.ts — прикладная библиотека/утилиты.
+
 import * as THREE from 'three';
 
 /* ─── helpers ─────────────────────────────────────────────────────────── */
@@ -765,6 +767,7 @@ export const EQUIPMENT_FACTORIES: Record<string, (size: number, color: number, e
   DEMULTIPLEXER: createMultiplexerObject,
   PROVIDER: createProviderObject,
   REGENERATOR: createRegeneratorObject,
+  REGENERATION_POINT: createRegeneratorObject,
   MODEM: createModemObject,
   EQUIPMENT: createEquipmentObject,
   MESH_RELAY: createMeshRelayObject,
@@ -780,9 +783,11 @@ export const NODE_VISUALS: Record<string, { size: number; color: number; emissiv
   MULTIPLEXER: { size: 0.012, color: 0xe6a7ff, emissive: 0x3a1456 },
   DEMULTIPLEXER: { size: 0.012, color: 0xb36cff, emissive: 0x1d0840 },
   REGENERATOR: { size: 0.016, color: 0x7df1ff, emissive: 0x08374a },
+  REGENERATION_POINT: { size: 0.014, color: 0x7df1ff, emissive: 0x08374a },
   MODEM: { size: 0.010, color: 0xff7d7d, emissive: 0x3a0e0e },
   BASE_STATION: { size: 0.020, color: 0xffc3a0, emissive: 0x3a240f },
   SATELLITE: { size: 0.05, color: 0x9fe7ff, emissive: 0x0a2b3d },
+  SATELLITE_RASSVET: { size: 0.05, color: 0x9fe7ff, emissive: 0x0a2b3d },
   EQUIPMENT: { size: 0.010, color: 0xffffff, emissive: 0x111133 },
   MESH_RELAY: { size: 0.016, color: 0x00e5ff, emissive: 0x073040 },
   SMS_GATEWAY: { size: 0.016, color: 0xffd740, emissive: 0x3a3010 },
@@ -808,9 +813,11 @@ export const TYPE_LABELS_RU: Record<string, string> = {
   MULTIPLEXER: 'Мультиплексор',
   DEMULTIPLEXER: 'Демультиплексор',
   REGENERATOR: 'Регенератор',
+  REGENERATION_POINT: 'Точка регенерации',
   MODEM: 'Модем',
   BASE_STATION: 'Базовая станция',
   SATELLITE: 'Спутник',
+  SATELLITE_RASSVET: 'Спутник (Рассвет)',
   EQUIPMENT: 'Оборудование',
   MESH_RELAY: 'Mesh-ретранслятор',
   SMS_GATEWAY: 'SMS-шлюз (2G)',

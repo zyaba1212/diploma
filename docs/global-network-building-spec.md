@@ -75,7 +75,6 @@ Enum:
   - `CABLE_UNDERGROUND_FIBER` — underground fiber
   - `CABLE_UNDERGROUND_COPPER` — underground copper
 - Узлы:
-  - `PROVIDER` — провайдер (узел)
   - `SERVER` — сервер/дата-центр (узел)
   - `SWITCH` — L2/L3-коммутатор (узел)
   - `MULTIPLEXER` — мультиплексор (узел, DWDM-подобное)
@@ -85,6 +84,9 @@ Enum:
   - `BASE_STATION` — базовая станция (узел)
   - `SATELLITE` — спутник (узел)
   - `EQUIPMENT` — прочее оборудование (узел)
+  - `MESH_RELAY`, `SMS_GATEWAY`, `VSAT_TERMINAL`, `OFFLINE_QUEUE` — офлайн / mesh / транзакции (узлы)
+
+Иных значений `NetworkElementType` в схеме нет (расширенная топология и отдельные типы кабелей AERIAL/INDOOR сняты).
 
 Правило “underground vs submarine”:
 
@@ -156,6 +158,22 @@ Enum:
 - `color: feature.properties.color | null`
 - `importedAt: <ISO>`
 
+Дополнительно (если не указан флаг **`--no-details`** в скрипте): для каждого уникального `feature.properties.id` выполняется HTTP-загрузка файла `cable/<id>.json` из того же репозитория (база URL по умолчанию совпадает с каталогом `cable/` на `raw.githubusercontent.com`; переопределение — **`SUBMARINE_CABLE_DETAIL_BASE_URL`**, строка с завершающим `/`). Из ответа в `metadata` попадают:
+
+- `year: number | отсутствует` — из `rfs_year`, иначе из префикса строки `rfs` (первые четыре цифры, если есть)
+- `countries: string[] | отсутствует` — уникальные значения `landing_points[].country`, отсортированные лексикографически
+- `rfs: string | отсутствует` — сырая строка `rfs` (например «2020 Q2»), если задана
+- `officialUrl: string | отсутствует` — из поля `url` в `cable/<id>.json`, только если после обрезки пробелов строка начинается с `http://` или `https://` и парсится как URL с тем же протоколом (иначе не сохраняется)
+
+При ошибке загрузки или отсутствии файла для конкретного `id` сегмент всё равно импортируется с базовыми полями выше; год и страны для него могут отсутствовать.
+
+**Отображение в UI (`global-network`):** блок «Источники» строится единым helper для всех типов объектов (кабели и узлы), если доступны валидные URL из `metadata`/`provider`:
+
+- «Сайт проекта / оператора» — при наличии `metadata.officialUrl` (или совместимого URL-поля в metadata),
+- «Источник провайдера» — из `NetworkProvider.sourceUrl`,
+- «Ссылка на датасет/запись» — по типу и метаданным объекта (например, `cable/<id>.json` для OUCM, OSM permalink, data.gov.au, Celestrak),
+- «Поиск в Wikipedia (EN)» — для подводных кабелей; это URL **поиска**, не гарантированная статья и не подтверждение трассы.
+
 #### 3.3.3. `CABLE_UNDERGROUND_FIBER/CABLE_UNDERGROUND_COPPER` (underground)
 
 Текущий underground импорт задаёт (через `scripts/sync-underground-cables.mjs`):
@@ -179,7 +197,7 @@ Enum:
   - `segmentCount: number`
 - `importedAt: <ISO>`
 
-#### 3.3.4. Узлы (`PROVIDER/SERVER/...`)
+#### 3.3.4. Узлы (`SERVER/...`)
 
 Текущий `scripts/sync-satellites.mjs` оставляет пока минимальную metadata для спутника:
 
@@ -218,7 +236,9 @@ Enum:
 - URL по умолчанию: `.../cable/cable-geo.json`
 - Env/per-file:
   - `SUBMARINE_CABLE_GEO_URL` (подмена URL)
+  - `SUBMARINE_CABLE_DETAIL_BASE_URL` (база для `cable/<id>.json`, по умолчанию каталог `cable/` того же репозитория)
   - `--file path/to/cable-geo.json`
+  - `--no-details` — не запрашивать `cable/<id>.json` (без `year` / `countries` в metadata)
 
 Идемпотентность:
 
@@ -379,7 +399,6 @@ Query params:
 
 В текущей логике узлы маппятся на визуальные параметры (из `nodeVisuals`):
 
-- `PROVIDER`: size `0.022`, color `0x7aa2ff`, emissive `0x103060`
 - `SERVER`: size `0.018`, color `0x3ddc97`, emissive `0x0f4a2e`
 - `SWITCH`: size `0.014`, color `0xf6c177`, emissive `0x3b2b10`
 - `MULTIPLEXER`: size `0.012`, color `0xe6a7ff`, emissive `0x3a1456`
@@ -511,7 +530,7 @@ UI поведение:
 - `SATELLITE`:
   - цвет: `#9fe7ff`
   - radius: `3`
-- остальные узлы (`PROVIDER/SERVER/SWITCH/.../EQUIPMENT`):
+- остальные узлы (`SERVER/SWITCH/.../EQUIPMENT`):
   - цвет: взять из визуального mapping 3D (или упрощённо единым цветом, если пока нет полной палитры)
   - базовый radius: `4`
 
@@ -648,7 +667,6 @@ UI поведение:
 
 Рекомендуемая легенда для 2D (если расширить отрисовку до полной палитры):
 
-- `PROVIDER` — color `#7aa2ff`
 - `SERVER` — color `#3ddc97`
 - `SWITCH` — color `#f6c177`
 - `MULTIPLEXER` — color `#e6a7ff`

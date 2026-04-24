@@ -1,0 +1,33 @@
+---
+description: Обязательный онбординг-контекст проекта diploma-z96a для всех агентов
+alwaysApply: true
+---
+
+# Project Overview — обязательный контекст
+
+Перед любыми изменениями в репозитории прочитай [`docs/project-overview.md`](../../docs/project-overview.md) — единая точка входа для агентов (стек, модели БД, API, инварианты, правила работы). Не дублируй её здесь — читай по ссылке.
+
+## TL;DR
+
+- **`diploma-z96a`** — Next.js 15 (App Router) + TS, PostgreSQL/Prisma, Three.js + Leaflet, Solana/Phantom (`tweetnacl + bs58`).
+- Тема диплома: **«Архитектура систем транзакций в условиях частичного отсутствия интернета»**.
+- Stage 0–12 закрыты; инварианты — в [`PROJECT_STAGES.md`](../../PROJECT_STAGES.md).
+
+## Минимум, что нельзя ломать
+
+- **API-контракты**: `GET /api/network`, `POST /api/auth(/verify)`, `GET /api/tile`, `GET /api/geocode/search|reverse`, `GET /api/profile`, `POST /api/profile/username`, эндпоинты `/api/proposals/:id/*`.
+- **Phantom auth**: подпись + `tweetnacl` + `bs58` + upsert `User` по `pubkey`.
+- **Wallet autoconnect**: 30 мин idle → сброс (`src/lib/wallet-autoconnect-policy.ts`).
+- **Username**: `usernameSetAt == null` ⇒ можно переопределить; `!= null` ⇒ 403.
+- **3D↔2D**: ручное переключение, без auto-zoom-переходов; центр через `src/lib/three/globeMapSync.ts`.
+- **Пути страниц App Router** не переименовывать.
+
+## Процесс
+
+- **БД / миграции / `schema.prisma`** меняет только **DBPrismaAgent**.
+- Крупные фичи делегируются по ролям (см. [`AGENTS.md`](../../AGENTS.md)); при работе по стадии — выполняй **только свою секцию A–G**.
+- Перед коммитом: `npm run lint`, `npm run build`; при релевантных правках — соответствующий `test:*` smoke.
+- Секреты / `.env*` — не коммитить, не логировать ([`docs/secrets-policy.md`](../../docs/secrets-policy.md)).
+- При изменении инвариантов — синхронизировать `docs/project-overview.md`.
+
+Детали по всем пунктам и полный перечень API/страниц/скриптов — в `docs/project-overview.md`.

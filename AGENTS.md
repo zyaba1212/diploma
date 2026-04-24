@@ -6,6 +6,8 @@
 
 Проект — WEB3 Next.js приложение для визуализации инфокоммуникационной сети на 3D-глобусе (Three.js) с переходом в 2D-карту (Leaflet). Авторизация через Phantom (Solana) по подписи сообщения, хранение данных в PostgreSQL через Prisma.
 
+> **Новые агенты — обязательно к прочтению до любых изменений**: `docs/project-overview.md` (полный онбординг без собственной диагностики: стек, модели, API, инварианты, правила работы).
+
 ### Как «делегировать» роли в Cursor
 
 Роли ниже (**DBPrismaAgent** и др.) — **не отдельные автоматические процессы**. Чтобы разнести работу: открой **новый чат** и явно укажи роль + секцию из `docs/agents/*.md`. Один чат с ассистентом = один поток исполнения; координацию между ролями ведёт человек или чеклист в `DEVELOPMENT_JOURNAL.md`.
@@ -43,7 +45,7 @@
 
 Если в задаче указано “Stage 6 (chain + Anchor)”, то выполняй только свою секцию (букву A-G) из:
 
-- `C:\diploma\docs\agents\stage6-prompts.md`
+- `docs/agents/stage6-prompts.md`
 
 - `RefactorGuardianAgent` → **A**
 - `ArchitectAgent` → **B**
@@ -57,14 +59,14 @@
 
 ## Stage 7–8 execution mapping (A-G)
 
-- Stage 7: `C:\diploma\docs\agents\stage7-prompts.md` — соответствие A–G см. в начале файла.
-- Stage 8: `C:\diploma\docs\agents\stage8-prompts.md` — соответствие A–G см. в начале файла.
+- Stage 7: `docs/agents/stage7-prompts.md` — соответствие A–G см. в начале файла.
+- Stage 8: `docs/agents/stage8-prompts.md` — соответствие A–G см. в начале файла.
 
 ## Stage 9 execution mapping (A-G)
 
 Если в задаче указано “Stage 9 (deployment + observability + operations)”, выполняй только свою секцию (букву A-G) из:
 
-- `C:\diploma\docs\agents\stage9-prompts.md`
+- `docs/agents/stage9-prompts.md`
 
 - `RefactorGuardianAgent` → **A**
 - `ArchitectAgent` → **B**
@@ -78,7 +80,7 @@
 
 Если в задаче указано “Stage 10 (security + observability production depth)”, выполняй только свою секцию (букву A-G) из:
 
-- `C:\diploma\docs\agents\stage10-prompts.md`
+- `docs/agents/stage10-prompts.md`
 
 - `RefactorGuardianAgent` → **A**
 - `ArchitectAgent` → **B**
@@ -92,7 +94,7 @@
 
 Если в задаче указано “Stage 11 (post-launch / production operations & scaling)”, выполняй только свою секцию (букву A-G) из:
 
-- `C:\diploma\docs\agents\stage11-prompts.md`
+- `docs/agents/stage11-prompts.md`
 
 - `RefactorGuardianAgent` → **A**
 - `ArchitectAgent` → **B**
@@ -106,7 +108,7 @@
 
 Если в задаче указано “Stage 12 (implementation of Stage 11 + governance / moderation baseline)”, выполняй только свою секцию (букву A-G) из:
 
-- `C:\diploma\docs\agents\stage12-prompts.md`
+- `docs/agents/stage12-prompts.md`
 
 - `RefactorGuardianAgent` → **A**
 - `ArchitectAgent` → **B**

@@ -66,7 +66,7 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/diploma?schema=publi
 
 ## 3. Команды Prisma (зона DBPrismaAgent)
 
-Из каталога `C:\diploma`:
+Из каталога корня проекта (например `C:\diploma2\diploma`):
 
 ```powershell
 npm i

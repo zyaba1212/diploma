@@ -1,5 +1,5 @@
 /**
- * Заполняет “узловые” типы NetworkElement (PROVIDER/SERVER/SWITCH/...)
+ * Заполняет “узловые” типы NetworkElement (SERVER/SWITCH/...)
  * на основе геометрии уже импортированных кабелей.
  *
  * Это НЕ прямой импорт конкретного оборудования (OSM/TLE-данные для каждого типа
@@ -12,10 +12,11 @@
  * а не из “пустых заглушек”.
  */
 import { PrismaClient } from "@prisma/client";
+import { resolveServerSourceUrl } from "./lib/resolve-server-source-url.mjs";
 
 const prisma = new PrismaClient();
 
-const NODE_TYPES = ["PROVIDER", "SERVER", "SWITCH", "MULTIPLEXER", "DEMULTIPLEXER", "REGENERATOR", "MODEM"];
+const NODE_TYPES = ["SERVER", "SWITCH", "MULTIPLEXER", "DEMULTIPLEXER", "REGENERATOR", "MODEM"];
 const CABLE_TYPES = ["CABLE_UNDERGROUND_FIBER", "CABLE_UNDERGROUND_COPPER"];
 
 function parseArgs(argv) {
@@ -116,7 +117,6 @@ async function main() {
     const len = sampled.length;
 
     const positionByType = {
-      PROVIDER: pickPoint(sampled, 0),
       SERVER: pickPoint(sampled, Math.floor(len / 3)),
       SWITCH: pickPoint(sampled, Math.floor((len * 2) / 3)),
       MULTIPLEXER: pickPoint(sampled, Math.floor(len / 4)),
@@ -130,40 +130,58 @@ async function main() {
       if (!pos) continue;
       const sourceId = sourceIdForNode(scope, providerId, type);
       const nodeName = `${namePrefix} — ${type}`;
+      const sourceUrl =
+        type === "SERVER"
+          ? resolveServerSourceUrl({
+              name: nodeName,
+              operator: namePrefix,
+              metadata: {
+                dataset: "derived-from-cables",
+                operator: namePrefix,
+              },
+            })
+          : null;
+
+      const createData = {
+        sourceId,
+        scope,
+        type,
+        providerId,
+        name: nodeName,
+        lat: pos.lat,
+        lng: pos.lng,
+        altitude: null,
+        metadata: {
+          dataset: "derived-from-cables",
+          licenseNote: "inferred positions derived from licensed cable geometries already imported into this DB",
+          derivedFromProviderId: providerId,
+          derivedFromCableSourceIds: cableSourceIds.slice(0, 20),
+          derivedIndex: null,
+          importedAt: new Date().toISOString(),
+        },
+      };
+      const updateData = {
+        name: nodeName,
+        providerId,
+        lat: pos.lat,
+        lng: pos.lng,
+        metadata: {
+          dataset: "derived-from-cables",
+          licenseNote: "inferred positions derived from licensed cable geometries already imported into this DB",
+          derivedFromProviderId: providerId,
+          derivedFromCableSourceIds: cableSourceIds.slice(0, 20),
+          importedAt: new Date().toISOString(),
+        },
+      };
+      if (type === "SERVER" && sourceUrl) {
+        createData.sourceUrl = sourceUrl;
+        updateData.sourceUrl = sourceUrl;
+      }
 
       upserts.push({
         where: { sourceId },
-        create: {
-          sourceId,
-          scope,
-          type,
-          providerId,
-          name: nodeName,
-          lat: pos.lat,
-          lng: pos.lng,
-          altitude: null,
-          metadata: {
-            dataset: "derived-from-cables",
-            licenseNote: "inferred positions derived from licensed cable geometries already imported into this DB",
-            derivedFromProviderId: providerId,
-            derivedFromCableSourceIds: cableSourceIds.slice(0, 20),
-            derivedIndex: type === "PROVIDER" ? 0 : null,
-            importedAt: new Date().toISOString(),
-          },
-        },
-        update: {
-          name: nodeName,
-          providerId,
-          lat: pos.lat,
-          lng: pos.lng,
-          metadata: {
-            dataset: "derived-from-cables",
-            licenseNote: "inferred positions derived from licensed cable geometries already imported into this DB",
-            derivedFromProviderId: providerId,
-            derivedFromCableSourceIds: cableSourceIds.slice(0, 20),
-            importedAt: new Date().toISOString(),
-          },
-        },
+        create: createData,
+        update: updateData,
       });
     }
   }

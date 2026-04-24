@@ -1,3 +1,5 @@
+// HTTP API /api/proposals/[id]/apply — Next.js Route Handler.
+
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import * as nodeCrypto from 'node:crypto';
@@ -15,6 +17,7 @@ import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 import { logApiMetric } from '@/lib/apiOps';
 import { internalApiError } from '@/lib/apiError';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
+import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
 
 type Params = {
   params: Promise<{ id: string }>;
@@ -100,6 +103,10 @@ export async function POST(req: Request, { params }: Params) {
   const ok = nacl.sign.detached.verify(msgBytes, sigBytes, pkBytes);
   if (!ok) {
     return NextResponse.json({ error: 'signature invalid' }, { status: 401 });
+  }
+
+  if (await isUserBanned(proposal.authorPubkey)) {
+    return userBannedResponsePlain();
   }
 
   const clientIp = getClientIp(req);

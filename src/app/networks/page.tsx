@@ -1,12 +1,14 @@
 'use client';
+// Страница /networks — UI Next.js App Router.
+
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
-
 type ProposalDTO = {
   id: string;
   scope: string;
@@ -33,8 +35,8 @@ type ActionDTO = {
 
 export default function NetworksPage() {
   const { publicKey, signMessage } = useWallet();
+  const sessionVerified = useSessionVerified();
   const pubkey = publicKey?.toBase58() ?? '';
-
   const [proposals, setProposals] = useState<ProposalDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +89,7 @@ export default function NetworksPage() {
 
   const handleVote = useCallback(
     async (proposalId: string, voteType: 'FOR' | 'AGAINST') => {
-      if (!publicKey || !signMessage) return;
+      if (!publicKey || !signMessage || !sessionVerified) return;
       setVoting(true);
       setVoteError(null);
       try {
@@ -116,7 +118,7 @@ export default function NetworksPage() {
         setVoting(false);
       }
     },
-    [publicKey, signMessage, pubkey],
+    [publicKey, signMessage, pubkey, sessionVerified],
   );
 
   const loadActions = useCallback(async (proposalId: string) => {
@@ -156,13 +158,9 @@ export default function NetworksPage() {
       style={{ minHeight: '100vh', background: 'var(--bg)', padding: '72px 24px 40px' }}
     >
       <div className="networks-page-inner" style={{ maxWidth: 900, margin: '0 auto' }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginBottom: 24 }}>
           Предложенные сети
         </h1>
-        <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 28 }}>
-          Предложения пользователей по построению устойчивой сетевой инфраструктуры.
-          Голосуйте за лучшие решения! Референсная топология по Республике Беларусь закреплена вверху списка.
-        </p>
 
         {loading && <p style={{ color: 'var(--muted)' }}>Загрузка…</p>}
         {error && <p style={{ color: 'var(--danger, #ff6b6b)' }}>Ошибка: {error}</p>}
@@ -181,7 +179,7 @@ export default function NetworksPage() {
                 style={{
                   background: isSelected ? 'rgba(120,160,255,0.08)' : 'rgba(255,255,255,0.03)',
                   border: `1px solid ${isSelected ? 'rgba(120,160,255,0.3)' : 'rgba(232,236,255,0.10)'}`,
-                  borderRadius: 12,
+                  borderRadius: 4,
                   padding: '18px 22px',
                   cursor: 'pointer',
                   transition: 'all 0.2s',
@@ -258,28 +256,30 @@ export default function NetworksPage() {
                 {isSelected && (
                   <div
                     className="networks-vote-actions"
-                    style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}
+                    style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <Link href={`/networks/${p.id}`} style={{ textDecoration: 'none' }}>
-                      <Button>Просмотр сети</Button>
-                    </Link>
-                    {p.status === 'SUBMITTED' && publicKey && (
-                      <>
-                        <Button
-                          onClick={() => handleVote(p.id, 'FOR')}
-                          disabled={voting || tally?.userVote != null}
-                        >
-                          {tally?.userVote === 'FOR' ? '✓ За' : 'За'}
-                        </Button>
-                        <Button
-                          onClick={() => handleVote(p.id, 'AGAINST')}
-                          disabled={voting || tally?.userVote != null}
-                        >
-                          {tally?.userVote === 'AGAINST' ? '✓ Против' : 'Против'}
-                        </Button>
-                      </>
-                    )}
+                    <>
+                      <Link href={`/networks/${p.id}`} style={{ textDecoration: 'none' }}>
+                        <Button>Просмотр сети</Button>
+                      </Link>
+                      {p.status === 'SUBMITTED' && publicKey && (
+                        <>
+                          <Button
+                            onClick={() => handleVote(p.id, 'FOR')}
+                            disabled={voting || tally?.userVote != null || !sessionVerified}
+                          >
+                            {tally?.userVote === 'FOR' ? '✓ За' : 'За'}
+                          </Button>
+                          <Button
+                            onClick={() => handleVote(p.id, 'AGAINST')}
+                            disabled={voting || tally?.userVote != null || !sessionVerified}
+                          >
+                            {tally?.userVote === 'AGAINST' ? '✓ Против' : 'Против'}
+                          </Button>
+                        </>
+                      )}
+                    </>
                   </div>
                 )}
 

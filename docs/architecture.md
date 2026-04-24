@@ -16,6 +16,8 @@
 
 `@solana/wallet-adapter-react` по умолчанию сохраняет выбранный кошелёк в `localStorage` (`walletName`). В приложении задана **политика сброса autoconnect**: после **30 минут** без активности пользователя на сайте (и при следующем заходе, если с последней метки активности прошло столько же времени) сохранённое подключение не используется для автоподключения; при явном **disconnect** предпочтение тоже очищается (поведение адаптера). Реализация: `src/lib/wallet-autoconnect-policy.ts`, `WalletStaleAutoconnectGuard`, `WalletIdleAutoconnect` в `src/app/providers.tsx`. Промпт для доработок: `docs/agents/wallet-autoconnect-prompt.md` (роль **Web3SolanaAgent**).
 
+**Отдельно — сеанс авторизации (подпись + `POST /api/auth/verify`):** не путать с autoconnect кошелька. Подпись запускается **только по кнопке «Авторизоваться»** в UI, не автоматически при подключении кошелька; при **disconnect** сеанс сбрасывается и авторизацию нужно пройти снова. Пока открыта хотя бы одна вкладка, фоновый heartbeat обновляет `localStorage` (`diploma_lastAnyTabAliveAt`). После **закрытия всех вкладок**, если с последнего heartbeat прошло **больше 1 минуты**, при следующем заходе клиентский verify-сессия сбрасывается. Синхронизация между вкладками: те же ключи `localStorage` + `BroadcastChannel('diploma-auth')`. Реализация: `src/lib/auth-session.ts`, `AuthSessionCoordinator`, хук `useSessionVerified` в `src/hooks/useSessionVerified.ts`.
+
 ### Профиль: username (Auth / Profile)
 
 - **Правила username:**
@@ -41,7 +43,7 @@
   - если `usernameSetAt != null`, сервер отклоняет установку как “смена не поддерживается” (403).
 - UI: страница **`/cabinet`** показывает:
   - когда кошелёк не подключён — признак “подключите кошелёк”;
-  - когда записи в БД нет — просьбу “Авторизовать” (после успешного `POST /api/auth/verify`);
+  - когда записи в БД нет — просьбу «Авторизоваться» в шапке (после успешного `POST /api/auth/verify`);
   - форму переопределения только при `usernameSetAt === null`;
   - после `POST /api/auth/verify` фронт диспатчит `auth:verified` и инициирует refetch профиля.
   - детали фазы: `docs/agents/auth-profile-phase-prompts.md`.
@@ -100,7 +102,7 @@ Stage 10 фиксирует production-depth hardening без изменения
 По факту реализации на текущем коде:
 - Shared rate limit state: реализован “Redis-ready” режим в `src/lib/rateLimit.ts`. При `RATE_LIMIT_BACKEND=redis` и `REDIS_URL` backend использует Redis, иначе деградирует в in-memory режим. Контракт ответа `429 { error: "rate limit exceeded" }` сохраняется.
 - Body size / mutation guards: единая политика body size на всех mutation routes proposals пока не выделена; базовый guard по `elementPayload` реализован только в `POST /api/proposals/:id/actions`.
-- Moderation / governance endpoints: реализован `POST /api/moderation/proposals/:id/decide`; allowlist задаётся `MODERATOR_PUBKEYS` (comma-separated base58). Endpoint использует optional Phantom-signature verify (только если в body передан `signature`), rate-limit key `moderation.decide:<clientIp>` и body size guard по `content-length` (ошибка: `400 { error: "payload too large" }`).
+- Moderation / governance endpoints: реализован `POST /api/moderation/proposals/:id/decide`; allowlist — записи **`ModeratorGrant`** в БД (пользователь уже есть в `User`) и/или env **`MODERATOR_PUBKEYS`** (comma-separated base58). Назначение модераторов — `/admin` (серверная staff-сессия). Endpoint использует optional Phantom-signature verify (только если в body передан `signature`), rate-limit key `moderation.decide:<clientIp>` и body size guard по `content-length` (ошибка: `400 { error: "payload too large" }`).
 - Observability/SLO: health-check и structured logs `api_metric` описаны в `docs/operations.md`; moderation endpoint также пишет `api_metric` через `logApiMetric`.
 
 Документы Stage 12:

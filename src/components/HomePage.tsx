@@ -1,22 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
+import { colors } from '@/theme/colors';
 
-const gradientText: CSSProperties = {
-  background: 'linear-gradient(120deg, #a78bfa 0%, #7aa2ff 45%, #38bdf8 100%)',
-  WebkitBackgroundClip: 'text',
-  backgroundClip: 'text',
-  color: 'transparent',
-};
-
-const glassPanel: CSSProperties = {
-  background: 'linear-gradient(145deg, rgba(122, 162, 255, 0.08), rgba(168, 85, 247, 0.06))',
-  border: '1px solid var(--border)',
-  borderRadius: 18,
-  padding: '22px 24px',
-  backdropFilter: 'blur(14px)',
-  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.25)',
+const cardPanel: CSSProperties = {
+  background: colors.bg.card,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 4,
+  padding: 16,
 };
 
 const featureCards = [
@@ -43,39 +35,6 @@ const featureCards = [
   },
 ] as const;
 
-/** Ссылка на закреплённое предложение с топологией по РБ (первый в списке API после сида). */
-function BelarusReferenceLink() {
-  const [href, setHref] = useState('/networks');
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/proposals?status=SUBMITTED,ACCEPTED,APPLIED&limit=1')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: { id?: string }[]) => {
-        if (!cancelled && list?.[0]?.id) setHref(`/networks/${list[0].id}`);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return (
-    <Link
-      href={href}
-      style={{
-        display: 'inline-block',
-        marginTop: 14,
-        fontSize: 14,
-        fontWeight: 600,
-        color: '#8ab4f8',
-        textDecoration: 'none',
-        borderBottom: '1px solid rgba(120, 160, 255, 0.35)',
-      }}
-    >
-      Референсная сеть по Беларуси в разделе «Предложения» →
-    </Link>
-  );
-}
-
 function FeatureCard({
   href,
   title,
@@ -92,26 +51,22 @@ function FeatureCard({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        ...glassPanel,
+        ...cardPanel,
         textDecoration: 'none',
-        color: 'var(--text)',
+        color: colors.text.primary,
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
         minHeight: 140,
-        transition: 'transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
-        transform: hover ? 'translateY(-3px)' : 'none',
-        boxShadow: hover
-          ? '0 14px 40px rgba(122, 162, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.3)'
-          : '0 8px 32px rgba(0, 0, 0, 0.25)',
-        borderColor: hover ? 'rgba(167, 139, 250, 0.35)' : 'var(--border)',
+        background: hover ? colors.bg.tableRowHover : colors.bg.card,
+        transition: 'background-color 0.1s ease',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.02em' }}>{title}</span>
-        <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 500 }}>Открыть &rarr;</span>
+        <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.02em' }}>{title}</span>
+        <span style={{ fontSize: 12, color: colors.text.secondary, fontWeight: 400 }}>Открыть &rarr;</span>
       </div>
-      <div style={{ fontSize: 14, color: 'var(--muted)', lineHeight: 1.55, marginTop: 'auto' }}>
+      <div style={{ fontSize: 14, color: colors.text.secondary, lineHeight: 1.55, marginTop: 'auto' }}>
         {description}
       </div>
     </Link>
@@ -127,7 +82,8 @@ export function HomePage() {
         paddingLeft: 24,
         paddingRight: 24,
         paddingBottom: 48,
-        color: 'var(--text)',
+        color: colors.text.primary,
+        background: colors.bg.primary,
       }}
     >
       <div
@@ -138,29 +94,13 @@ export function HomePage() {
           position: 'relative',
         }}
       >
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            top: -40,
-            right: -20,
-            width: 320,
-            height: 320,
-            borderRadius: '50%',
-            background:
-              'radial-gradient(circle, rgba(122, 162, 255, 0.22) 0%, rgba(168, 85, 247, 0.1) 45%, transparent 70%)',
-            filter: 'blur(2px)',
-            pointerEvents: 'none',
-          }}
-        />
-
         <section style={{ marginBottom: 40, position: 'relative' }}>
           <p
             style={{
               fontSize: 12,
               letterSpacing: '0.14em',
               textTransform: 'uppercase',
-              color: 'var(--muted)',
+              color: colors.text.secondary,
               margin: '0 0 14px',
               fontWeight: 600,
             }}
@@ -172,19 +112,19 @@ export function HomePage() {
               fontSize: 'clamp(1.75rem, 4vw, 2.65rem)',
               lineHeight: 1.12,
               margin: '0 0 16px',
-              fontWeight: 800,
+              fontWeight: 600,
               letterSpacing: '-0.03em',
               maxWidth: 920,
+              color: colors.text.primary,
             }}
           >
-            <span style={gradientText}>
-              Архитектура систем транзакций в условиях частичного отсутствия сетевого соединения
-            </span>
+            <span style={{ color: colors.accent }}>Архитектура систем транзакций</span> в условиях частичного
+            отсутствия интернета
           </h1>
           <p
             style={{
               fontSize: 'clamp(1rem, 2vw, 1.2rem)',
-              color: 'var(--muted)',
+              color: colors.text.secondary,
               lineHeight: 1.65,
               margin: 0,
               maxWidth: 720,
@@ -203,51 +143,48 @@ export function HomePage() {
             marginBottom: 36,
           }}
         >
-          <section style={glassPanel}>
+          <section style={cardPanel}>
             <h2
               style={{
                 fontSize: 13,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
-                color: 'var(--muted)',
+                color: colors.text.secondary,
                 margin: '0 0 12px',
-                fontWeight: 700,
+                fontWeight: 600,
               }}
             >
               Проблема
             </h2>
-            <p style={{ fontSize: 15, lineHeight: 1.65, margin: 0, color: 'rgba(232, 236, 255, 0.92)' }}>
+            <p style={{ fontSize: 15, lineHeight: 1.65, margin: 0, color: colors.text.primary }}>
               В 2024 году ураган в Мозыре (Беларусь) привёл к{' '}
-              <strong style={{ color: 'var(--text)' }}>трёхдневной потере связи</strong>. К 2026 году вводится
+              <strong style={{ color: colors.text.primary }}>трёхдневной потере связи</strong>. К 2026 году вводится
               цифровой рубль — гражданам нужен{' '}
-              <strong style={{ color: 'var(--text)' }}>надёжный доступ к транзакциям</strong> даже при отказах
+              <strong style={{ color: colors.text.primary }}>надёжный доступ к транзакциям</strong> даже при отказах
               сети.
             </p>
           </section>
-          <section style={glassPanel}>
+          <section style={cardPanel}>
             <h2
               style={{
                 fontSize: 13,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
-                color: 'var(--muted)',
+                color: colors.text.secondary,
                 margin: '0 0 12px',
-                fontWeight: 700,
+                fontWeight: 600,
               }}
             >
               Решение
             </h2>
-            <p style={{ fontSize: 15, lineHeight: 1.65, margin: 0, color: 'rgba(232, 236, 255, 0.92)' }}>
-              На платформе разложена в данных{' '}
-              <strong style={{ color: 'var(--text)' }}>референсная топология в границах Республики Беларусь</strong>:
-              узлы <strong style={{ color: 'var(--text)' }}>mesh</strong>, шлюзы{' '}
-              <strong style={{ color: 'var(--text)' }}>2G/SMS</strong>,{' '}
-              <strong style={{ color: 'var(--text)' }}>офлайн-очереди</strong> и{' '}
-              <strong style={{ color: 'var(--text)' }}>VSAT</strong>, подкреплённые подземными магистралями между
-              областными центрами — чтобы платежи не зависали при деградации интернета. Предложение закреплено вверху
-              списка «Предложенные сети».
+            <p style={{ fontSize: 15, lineHeight: 1.65, margin: 0, color: colors.text.primary }}>
+              Проект показывает отказоустойчивую архитектуру:{' '}
+              <strong style={{ color: colors.text.primary }}>mesh-сети</strong>, ретрансляция через{' '}
+              <strong style={{ color: colors.text.primary }}>2G/SMS</strong>,{' '}
+              <strong style={{ color: colors.text.primary }}>очереди офлайн-транзакций</strong> и резерв через{' '}
+              <strong style={{ color: colors.text.primary }}>VSAT</strong> — чтобы платежи не зависали при обрыве
+              интернета.
             </p>
-            <BelarusReferenceLink />
           </section>
         </div>
 
@@ -257,9 +194,9 @@ export function HomePage() {
               fontSize: 13,
               letterSpacing: '0.1em',
               textTransform: 'uppercase',
-              color: 'var(--muted)',
+              color: colors.text.secondary,
               margin: '0 0 18px',
-              fontWeight: 700,
+              fontWeight: 600,
             }}
           >
             Возможности платформы

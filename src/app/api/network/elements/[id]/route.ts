@@ -30,6 +30,7 @@ export async function GET(req: Request, { params }: Params) {
           providerId: el.providerId,
           name: el.name,
           sourceId: el.sourceId,
+          sourceUrl: el.sourceUrl,
           lat: el.lat,
           lng: el.lng,
           altitude: el.altitude,

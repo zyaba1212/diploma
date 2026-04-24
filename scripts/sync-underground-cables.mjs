@@ -38,6 +38,7 @@ const PROVIDER_SOURCE_URL = 'https://data.gov.au/data/dataset/fibre-optic-cable'
 
 const PROVIDER_LICENSE_NOTE =
   'CC BY 3.0 Australia — City of Gold Coast. Attribution required; locations/dimensions/depths must be confirmed on site.';
+const UNDERGROUND_DATASET = 'gold_coast_fibre_optic_cable';
 
 function parseArgs(argv) {
   let dryRun = false;
@@ -109,41 +110,28 @@ function sourceIdForSegmentScoped(feature, segIdx, scope) {
   return segIdx === 0 ? `${providerId}-${fid}` : `${providerId}-${fid}-s${segIdx}`;
 }
 
-/**
- * Maps WFS GeoJSON `feature.properties` from City of Gold Coast fibre layer into NetworkElement.metadata.
- * Known keys from live GetFeature sample (2026): name, visibility, open, address, phoneNumber, description,
- * LookAt, Region, Folder. Extra keys from the service are preserved under `wfsRaw`.
- */
-function goldCoastMetadataFromProps(props, { featureId, segmentIndex, segmentCount, color }) {
-  const p = props && typeof props === 'object' ? props : {};
-  const wfs = {
-    name: typeof p.name === 'string' ? p.name : null,
-    visibility: typeof p.visibility === 'boolean' ? p.visibility : null,
-    open: typeof p.open === 'boolean' ? p.open : null,
-    address: p.address ?? null,
-    phoneNumber: p.phoneNumber ?? null,
-    description: typeof p.description === 'string' && p.description.trim().length > 0 ? p.description.trim() : null,
-    LookAt: p.LookAt ?? null,
-    Region: p.Region ?? null,
-    Folder: typeof p.Folder === 'string' ? p.Folder : null,
-  };
-  const wfsRaw = { ...p };
-  return {
-    dataset: 'gold_coast_fibre_optic_cable',
-    licenseNote: PROVIDER_LICENSE_NOTE,
-    transportMode: 'underground',
-    underground: true,
-    submarine: false,
-    cableMaterial: 'fiber',
-    color,
-    depthMeters: null,
-    featureId,
-    segmentIndex,
-    segmentCount,
-    importedAt: new Date().toISOString(),
-    wfs,
-    wfsRaw,
-  };
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = (x) => (x * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function pathLengthKm(path) {
+  if (!Array.isArray(path) || path.length < 2) return 0;
+  let km = 0;
+  for (let i = 1; i < path.length; i++) km += haversineKm(path[i - 1], path[i]);
+  return km;
+}
+
+function computeGoldCoastMetrics(path) {
+  return { lengthKm: pathLengthKm(path) };
 }
 
 async function loadGeoJson(url, filePath) {
@@ -202,12 +190,7 @@ async function main() {
       const name = segments > 1 ? `${baseName} (segment ${segIdx + 1}/${segments})` : baseName;
 
       const color = '#7aa2ff'; // fiber
-      const meta = goldCoastMetadataFromProps(props, {
-        featureId: idForFeature(feature),
-        segmentIndex: segIdx,
-        segmentCount: segments,
-        color,
-      });
+      const metrics = computeGoldCoastMetrics(path);
 
       upserts.push({
         where: { sourceId },
@@ -218,13 +201,50 @@ async function main() {
           providerId,
           name,
           path,
-          metadata: meta,
+          metadata: {
+            dataset: UNDERGROUND_DATASET,
+            sourceClass: 'official',
+            licenseNote: PROVIDER_LICENSE_NOTE,
+            transportMode: 'underground',
+            underground: true,
+            submarine: false,
+            cableMaterial: 'fiber',
+            color,
+            lengthKm: Number(metrics.lengthKm.toFixed(2)),
+            // Physical depth isn't exposed in the WFS GeoJSON; keep explicit null for the renderer.
+            depthMeters: null,
+            featureId: idForFeature(feature),
+            folder: typeof props.Folder === 'string' ? props.Folder : null,
+            visibility: typeof props.visibility === 'boolean' ? props.visibility : null,
+            isOpen: typeof props.open === 'boolean' ? props.open : null,
+            segmentIndex: segIdx,
+            segmentCount: segments,
+            importedAt: new Date().toISOString(),
+          },
         },
         update: {
           name,
           path,
           providerId,
-          metadata: meta,
+          metadata: {
+            dataset: UNDERGROUND_DATASET,
+            sourceClass: 'official',
+            licenseNote: PROVIDER_LICENSE_NOTE,
+            transportMode: 'underground',
+            underground: true,
+            submarine: false,
+            cableMaterial: 'fiber',
+            color,
+            lengthKm: Number(metrics.lengthKm.toFixed(2)),
+            depthMeters: null,
+            featureId: idForFeature(feature),
+            folder: typeof props.Folder === 'string' ? props.Folder : null,
+            visibility: typeof props.visibility === 'boolean' ? props.visibility : null,
+            isOpen: typeof props.open === 'boolean' ? props.open : null,
+            segmentIndex: segIdx,
+            segmentCount: segments,
+            importedAt: new Date().toISOString(),
+          },
         },
       });
     }
@@ -245,14 +265,14 @@ async function main() {
     where: { id: providerId },
     update: {
       name: PROVIDER_NAME,
-      sourceUrl: `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE})`,
+      sourceUrl: PROVIDER_SOURCE_URL,
       scope,
     },
     create: {
       id: providerId,
       name: PROVIDER_NAME,
       scope,
-      sourceUrl: `${PROVIDER_SOURCE_URL} (License note: ${PROVIDER_LICENSE_NOTE})`,
+      sourceUrl: PROVIDER_SOURCE_URL,
     },
   });
 

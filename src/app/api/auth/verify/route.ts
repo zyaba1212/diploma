@@ -3,7 +3,9 @@ import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@/lib/prisma';
+import { getClientIp } from '@/lib/rateLimit';
 import { validateUsernameFormat } from '@/lib/username';
+import { userBannedResponseOk } from '@/lib/user-ban';
 
 type Body = {
   publicKey?: string;
@@ -13,6 +15,8 @@ type Body = {
 };
 
 export async function POST(req: Request) {
+  const clientIp = getClientIp(req);
+
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -63,8 +67,12 @@ export async function POST(req: Request) {
 
     const existing = await prisma.user.findUnique({
       where: { pubkey: publicKey },
-      select: { username: true },
+      select: { username: true, bannedAt: true },
     });
+
+    if (existing?.bannedAt) {
+      return userBannedResponseOk();
+    }
 
     if (!existing) {
       const username = await generateRandomUsernameUnique();
@@ -78,6 +86,13 @@ export async function POST(req: Request) {
         data: { username, usernameSetAt: null },
       });
     }
+
+    await prisma.userAuthSession.create({
+      data: {
+        pubkey: publicKey,
+        ip: clientIp,
+      },
+    });
 
     return NextResponse.json({ ok: true });
   } catch {

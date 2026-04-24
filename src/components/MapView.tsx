@@ -1,11 +1,24 @@
 'use client';
+// MapView — компонент интерфейса (React).
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { normalizeLatLng } from '@/lib/geo/normalizeLatLng';
 import { padBounds, type LatLngBounds } from '@/lib/geo/networkBounds';
-import type { BboxTuple } from '@/lib/geo/viewportBbox';
+import { SATELLITE_MIN_VISIBLE_ZOOM, type BboxTuple } from '@/lib/geo/viewportBbox';
 import type { LatLng, NetworkResponseDTO } from '@/lib/types';
+import {
+  cableSourceLinks,
+} from '@/lib/cableSourceLinks';
 import type L from 'leaflet';
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtmlAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/'/g, '&#39;');
+}
 
 export function MapView({
   network,
@@ -19,6 +32,8 @@ export function MapView({
   /** Видимая область карты — для загрузки сети по bbox (глобальная сеть). */
   onViewportChange,
   onError,
+  /** Текущий зум карты (синхронизировать с Leaflet); ниже `SATELLITE_MIN_VISIBLE_ZOOM` узлы SATELLITE не рисуются. */
+  mapZoom,
 }: {
   network: NetworkResponseDTO | null;
   center?: LatLng | null;
@@ -31,6 +46,7 @@ export function MapView({
   onZoomChanged?: (zoom: number) => void;
   onViewportChange?: (payload: { bbox: BboxTuple; zoom: number }) => void;
   onError?: (msg: string) => void;
+  mapZoom?: number;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -48,6 +64,16 @@ export function MapView({
   const lastAutoFitKeyRef = useRef<string | null>(null);
   /** Leaflet и layer group создаются асинхронно; без этого сеть могла прийти раньше карты и эффект не повторялся. */
   const [mapReady, setMapReady] = useState(false);
+  const providerNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of network?.providers ?? []) map.set(p.id, p.name);
+    return map;
+  }, [network?.providers]);
+  const providerSourceUrlById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of network?.providers ?? []) map.set(p.id, p.sourceUrl ?? '');
+    return map;
+  }, [network?.providers]);
 
   useEffect(() => {
     initialCenterRef.current = initialCenter;
@@ -117,6 +143,7 @@ export function MapView({
 
       const map = L.map(el, {
         zoomControl: false,
+        attributionControl: false,
         preferCanvas: true,
         minZoom: 2,
         maxZoom: 19,
@@ -137,7 +164,7 @@ export function MapView({
 
       L.tileLayer('/api/tile?z={z}&x={x}&y={y}&source=osm', {
         maxZoom: 19,
-        attribution: '© OSM',
+        attribution: '',
       }).addTo(map);
 
       const group = L.layerGroup();
@@ -227,7 +254,10 @@ export function MapView({
     if (!mapReady) return;
     const L = leafletRef.current;
     const group = layerRef.current;
-    if (!L || !group) return;
+    const map = mapRef.current;
+    if (!L || !group || !map) return;
+
+    const leafletZoom = typeof mapZoom === 'number' ? mapZoom : map.getZoom();
 
     group.clearLayers();
 
@@ -238,9 +268,11 @@ export function MapView({
       MULTIPLEXER: { color: '#e6a7ff', radius: 0.012 * 240 },
       DEMULTIPLEXER: { color: '#b36cff', radius: 0.012 * 240 },
       REGENERATOR: { color: '#7df1ff', radius: 0.016 * 240 },
+      REGENERATION_POINT: { color: '#7df1ff', radius: 0.014 * 240 },
       MODEM: { color: '#ff7d7d', radius: 0.010 * 240 },
       BASE_STATION: { color: '#ffc3a0', radius: 0.020 * 240 },
       SATELLITE: { color: '#9fe7ff', radius: 0.012 * 240 },
+      SATELLITE_RASSVET: { color: '#9fe7ff', radius: 0.012 * 240 },
       EQUIPMENT: { color: '#ffffff', radius: 0.010 * 240 },
       MESH_RELAY: { color: '#00e5ff', radius: 0.014 * 240 },
       SMS_GATEWAY: { color: '#ffd740', radius: 0.014 * 240 },
@@ -274,14 +306,37 @@ export function MapView({
                   ? '#4fd7ff'
                   : '#ffd28a';
 
-          const provider = el.providerId
-            ? network.providers.find((p) => p.id === el.providerId)?.name
-            : '';
+          const provider = el.providerId ? (providerNameById.get(el.providerId) ?? '') : '';
           const countries = el.metadata?.countries
             ? Array.isArray(el.metadata.countries)
               ? (el.metadata.countries as string[]).join(', ')
               : String(el.metadata.countries)
             : '';
+          const year =
+            el.metadata?.year != null && el.metadata?.year !== ''
+              ? String(el.metadata.year as string | number)
+              : '';
+
+          const links = cableSourceLinks({
+            elType: el.type,
+            cableName: typeof el.name === 'string' ? el.name : '',
+            metadata: el.metadata,
+            elementSourceUrl: el.sourceUrl,
+            providerSourceUrl: el.providerId ? (providerSourceUrlById.get(el.providerId) ?? '') : '',
+          });
+          let sourcesHtml = '';
+          if (links.length > 0) {
+            sourcesHtml = '<br/><span style="color:#8ab4f8">Источники</span>';
+            for (const link of links) {
+              sourcesHtml += `<br/><a href="${escapeHtmlAttr(link.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`;
+              if (link.domain) {
+                sourcesHtml += ` <span style="color:rgba(180,210,255,0.72);font-size:11px">(${escapeHtml(link.domain)})</span>`;
+              }
+              if (link.note) {
+                sourcesHtml += `<br/><span style="color:rgba(180,210,255,0.7);font-size:11px">${escapeHtml(link.note)}</span>`;
+              }
+            }
+          }
 
           L.polyline(latlngs, {
             color,
@@ -290,24 +345,47 @@ export function MapView({
             dashArray: isUnderground ? '6, 5' : undefined,
           })
             .bindTooltip(
-              `<b>${el.name || el.type}</b>` +
-                (provider ? `<br/>Провайдер: ${provider}` : '') +
-                (countries ? `<br/>${countries}` : ''),
+              `<b>${escapeHtml(String(el.name || el.type))}</b>` +
+                (provider ? `<br/>Провайдер: ${escapeHtml(provider)}` : '') +
+                (year ? `<br/>Год: ${escapeHtml(year)}` : '') +
+                (countries ? `<br/>Страны: ${escapeHtml(countries)}` : '') +
+                sourcesHtml,
               { sticky: true, className: 'map-tooltip' },
             )
             .addTo(group);
         } else if (typeof el.lat === 'number' && typeof el.lng === 'number') {
+          if ((el.type === 'SATELLITE' || el.type === 'SATELLITE_RASSVET') && leafletZoom < SATELLITE_MIN_VISIBLE_ZOOM)
+            continue;
           const visual = nodeVisuals2D[el.type];
           if (!visual) continue;
 
-          const nodeProvider = el.providerId
-            ? network.providers.find((p) => p.id === el.providerId)?.name
-            : '';
+          const nodeProvider = el.providerId ? (providerNameById.get(el.providerId) ?? '') : '';
+          const nodeProviderSourceUrl = el.providerId ? (providerSourceUrlById.get(el.providerId) ?? '') : '';
           const nodeCountries = el.metadata?.countries
             ? Array.isArray(el.metadata.countries)
               ? (el.metadata.countries as string[]).join(', ')
               : String(el.metadata.countries)
             : '';
+          const nodeLinks = cableSourceLinks({
+            elType: el.type,
+            cableName: typeof el.name === 'string' ? el.name : '',
+            metadata: el.metadata,
+            elementSourceUrl: el.sourceUrl,
+            providerSourceUrl: nodeProviderSourceUrl,
+          });
+          let nodeSourcesHtml = '';
+          if (nodeLinks.length > 0) {
+            nodeSourcesHtml = '<br/><span style="color:#8ab4f8">Источники</span>';
+            for (const link of nodeLinks) {
+              nodeSourcesHtml += `<br/><a href="${escapeHtmlAttr(link.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`;
+              if (link.domain) {
+                nodeSourcesHtml += ` <span style="color:rgba(180,210,255,0.72);font-size:11px">(${escapeHtml(link.domain)})</span>`;
+              }
+              if (link.note) {
+                nodeSourcesHtml += `<br/><span style="color:rgba(180,210,255,0.7);font-size:11px">${escapeHtml(link.note)}</span>`;
+              }
+            }
+          }
 
           L.circleMarker([el.lat, el.lng], {
             radius: Math.max(2, visual.radius),
@@ -318,16 +396,17 @@ export function MapView({
             fillOpacity: 0.62,
           })
             .bindTooltip(
-              `<b>${el.name || el.type}</b>` +
-                (nodeProvider ? `<br/>Провайдер: ${nodeProvider}` : '') +
-                (nodeCountries ? `<br/>${nodeCountries}` : ''),
+              `<b>${escapeHtml(String(el.name || el.type))}</b>` +
+                (nodeProvider ? `<br/>Провайдер: ${escapeHtml(nodeProvider)}` : '') +
+                (nodeCountries ? `<br/>${escapeHtml(nodeCountries)}` : '') +
+                nodeSourcesHtml,
               { sticky: true, className: 'map-tooltip' },
             )
             .addTo(group);
         }
       }
     }
-  }, [network, mapReady]);
+  }, [network, mapReady, mapZoom, providerNameById, providerSourceUrlById]);
 
   return <div ref={ref} style={{ height: '100%', width: '100%' }} />;
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 type NewsItem = {
   id: string;
@@ -53,7 +54,7 @@ export default function NewsPage() {
                 textDecoration: 'none',
                 background: 'rgba(255,255,255,0.03)',
                 border: '1px solid rgba(232,236,255,0.10)',
-                borderRadius: 12,
+                borderRadius: 4,
                 padding: '18px 22px',
                 transition: 'border-color 0.2s, background 0.2s',
               }}
@@ -91,6 +92,12 @@ export default function NewsPage() {
             Нет новостей по заданным критериям
           </p>
         )}
+
+        <div style={{ marginTop: 32, textAlign: 'center' }}>
+          <Link href="/" style={{ color: '#8ab4f8', textDecoration: 'none', fontSize: 14 }}>
+            ← На главную
+          </Link>
+        </div>
       </div>
 
       <style>{`

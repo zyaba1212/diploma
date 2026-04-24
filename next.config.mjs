@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  /** Dev: разрешить запросы к /_next/* с другого origin (например туннель z96a.xyz → localhost). */
+  allowedDevOrigins: ['z96a.xyz', 'www.z96a.xyz'],
   experimental: {
     // Next.js devtool segment explorer иногда ломает React Client Manifest в dev-режиме,
     // из-за чего страница может падать на SSR/pre-render и отдавать 500 (см. /cabinet логи).
@@ -12,6 +14,15 @@ const nextConfig = {
    * Сужаем watch + отключаем followSymlinks. При повторяющихся ошибках см. docs/windows-dev.md
    */
   webpack: (config, { dev }) => {
+    /**
+     * Windows / антивирус: filesystem cache webpack (`PackFileCacheStrategy`) даёт ENOENT на
+     * `.next/cache/webpack/**.pack.gz` и рассинхрон runtime ↔ чанки (`Cannot find module './NNNN.js'`,
+     * в рантайме — `Cannot read properties of undefined (reading 'call')` в __webpack_exec__).
+     * In-memory cache убирает дисковый pack. В dev — всегда; в production — только на win32 (CI/Linux без изменений).
+     */
+    if (dev || process.platform === 'win32') {
+      config.cache = { type: 'memory' };
+    }
     if (dev) {
       config.watchOptions = {
         ...config.watchOptions,

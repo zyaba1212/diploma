@@ -4,18 +4,20 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import bs58 from 'bs58';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
+import { useSessionVerified } from '@/hooks/useSessionVerified';
+import { resetAuthSessionClient, signAndVerifyAuthSession } from '@/lib/auth-session';
+import { colors } from '@/theme/colors';
 
 const NAV_LINK_STYLE: React.CSSProperties = {
   pointerEvents: 'auto',
   textDecoration: 'none',
-  color: 'var(--text)',
+  color: colors.text.primary,
   fontWeight: 600,
   fontSize: 13,
   padding: '8px 10px',
-  borderRadius: 10,
+  borderRadius: 4,
 };
 
 const LINKS: { href: string; label: string }[] = [
@@ -35,25 +37,28 @@ function truncatePubkey(pk: string): string {
 type ProfileJson = {
   username: string | null;
   inDatabase?: boolean;
+  isBanned?: boolean;
 };
 
 const btnBase: React.CSSProperties = {
   appearance: 'none',
-  borderRadius: 10,
-  border: '1px solid rgba(232, 236, 255, 0.18)',
-  background: 'rgba(255,255,255,0.08)',
-  color: 'var(--text)',
+  borderRadius: 4,
+  border: `1px solid ${colors.border}`,
+  background: colors.bg.primary,
+  color: colors.text.primary,
   padding: '6px 10px',
   cursor: 'pointer',
   fontSize: 12,
   fontWeight: 600,
+  transition: 'background-color 0.1s ease',
 };
 
 export function SiteHeader() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? '';
   const wallet = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const pubkey = useAuthorPubkey();
+  const sessionVerified = useSessionVerified();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -65,15 +70,23 @@ export function SiteHeader() {
   const walletWrapRef = useRef<HTMLDivElement>(null);
   const mobileMenuWrapRef = useRef<HTMLDivElement>(null);
 
-  const authorized = profile?.inDatabase === true;
+  const banned = profile?.isBanned === true;
+  const authorized = profile?.inDatabase === true && sessionVerified && !banned;
 
   const loadProfile = useCallback(async () => {
     if (!pubkey) { setProfile(null); return; }
     setProfileLoading(true);
     try {
-      const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`);
-      if (res.ok) setProfile((await res.json()) as ProfileJson);
-      else setProfile(null);
+      const res = await fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = (await res.json()) as ProfileJson;
+        if (data.isBanned) {
+          resetAuthSessionClient();
+        }
+        setProfile(data);
+      } else {
+        setProfile(null);
+      }
     } catch { setProfile(null); }
     finally { setProfileLoading(false); }
   }, [pubkey]);
@@ -123,19 +136,13 @@ export function SiteHeader() {
     if (!wallet.connected || !wallet.signMessage || !pubkey) return;
     setAuthBusy(true);
     try {
-      const message = `diploma-z96a auth\npubkey=${pubkey}\nts=${new Date().toISOString()}`;
-      const encoded = new TextEncoder().encode(message);
-      const signature = await wallet.signMessage(encoded);
-      const res = await fetch('/api/auth/verify', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ publicKey: pubkey, message, signature: bs58.encode(signature) }),
-      });
-      const json = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      await loadProfile();
-      window.dispatchEvent(new CustomEvent('auth:verified', { detail: { pubkey } }));
-      setDropdownOpen(false);
+      const result = await signAndVerifyAuthSession(pubkey, wallet.signMessage);
+      if (result === 'ok') {
+        await loadProfile();
+        setDropdownOpen(false);
+      } else if (result === 'banned') {
+        setDropdownOpen(false);
+      }
     } catch { /* wallet popup cancelled or network error */ }
     finally { setAuthBusy(false); }
   }, [pubkey, wallet, loadProfile]);
@@ -144,6 +151,7 @@ export function SiteHeader() {
     if (!wallet.connected || !wallet.disconnect) return;
     setConnBusy(true);
     try {
+      resetAuthSessionClient();
       await wallet.disconnect();
       setProfile(null);
       setDropdownOpen(false);
@@ -151,9 +159,12 @@ export function SiteHeader() {
     finally { setConnBusy(false); }
   }, [wallet]);
 
-  const displayLabel = authorized && profile?.username
-    ? profile.username
-    : pubkey ? truncatePubkey(pubkey) : '';
+  const displayLabel =
+    sessionVerified && profile?.inDatabase && profile?.username
+      ? profile.username
+      : pubkey
+        ? truncatePubkey(pubkey)
+        : '';
 
   const mobileNavLinkStyle: React.CSSProperties = {
     ...NAV_LINK_STYLE,
@@ -163,6 +174,8 @@ export function SiteHeader() {
     borderRadius: 0,
   };
 
+  if (pathname.startsWith('/admin')) return null;
+
   return (
     <header
       style={{
@@ -171,9 +184,8 @@ export function SiteHeader() {
         height: 52,
         zIndex: 1000,
         pointerEvents: 'none',
-        background: 'rgba(11,16,32,0.35)',
-        backdropFilter: 'blur(10px)',
-        borderBottom: '1px solid rgba(232, 236, 255, 0.10)',
+        background: colors.bg.card,
+        borderBottom: `1px solid ${colors.border}`,
       }}
       aria-label="Site header"
     >
@@ -256,24 +268,25 @@ export function SiteHeader() {
                 left: 0,
                 right: 0,
                 flexDirection: 'column',
-                background: 'rgba(18, 22, 40, 0.98)',
-                borderBottom: '1px solid rgba(232, 236, 255, 0.14)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                background: colors.bg.card,
+                borderBottom: `1px solid ${colors.border}`,
                 zIndex: 1001,
               }}
             >
-              {LINKS.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setMobileNavOpen(false)}
-                  style={{
-                    ...mobileNavLinkStyle,
-                    ...(pathname === link.href ? { background: 'rgba(120,160,255,0.15)', color: '#8ab4f8' } : {}),
-                  }}
-                >
-                  {link.label}
-                </Link>
+          {LINKS.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={() => setMobileNavOpen(false)}
+              style={{
+                ...mobileNavLinkStyle,
+                ...(pathname === link.href
+                  ? { background: colors.bg.tableRowHover, color: colors.accent }
+                  : {}),
+              }}
+            >
+              {link.label}
+            </Link>
               ))}
             </div>
           )}
@@ -289,7 +302,9 @@ export function SiteHeader() {
               href={link.href}
               style={{
                 ...NAV_LINK_STYLE,
-                ...(pathname === link.href ? { background: 'rgba(120,160,255,0.15)', color: '#8ab4f8' } : {}),
+                ...(pathname === link.href
+                  ? { background: colors.bg.tableRowHover, color: colors.accent }
+                  : {}),
               }}
             >
               {link.label}
@@ -320,11 +335,11 @@ export function SiteHeader() {
           ) : (
             <div style={{ position: 'relative' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
-                <span className="site-header-wallet-label" style={{ fontSize: 12, color: 'var(--text)', fontWeight: 600 }}>
+                <span className="site-header-wallet-label" style={{ fontSize: 12, color: colors.text.primary, fontWeight: 600 }}>
                   {profileLoading ? '...' : displayLabel}
                 </span>
                 {authorized ? (
-                  <span className="site-header-wallet-badge" style={{ fontSize: 11, color: 'var(--muted)' }}>авторизован</span>
+                  <span className="site-header-wallet-badge" style={{ fontSize: 11, color: colors.text.secondary }}>авторизован</span>
                 ) : (
                   <button
                     type="button"
@@ -333,7 +348,7 @@ export function SiteHeader() {
                     onClick={() => void authorize()}
                     disabled={authBusy || !wallet.signMessage}
                   >
-                    Авторизовать
+                    Авторизоваться
                   </button>
                 )}
                 <button
@@ -352,19 +367,24 @@ export function SiteHeader() {
                   role="menu"
                   style={{
                     position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-                    minWidth: 200, padding: 8, borderRadius: 10,
-                    border: '1px solid rgba(232, 236, 255, 0.14)',
-                    background: 'rgba(18, 22, 40, 0.98)',
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                    minWidth: 200, padding: 8, borderRadius: 4,
+                    border: `1px solid ${colors.border}`,
+                    background: colors.bg.card,
                     display: 'flex', flexDirection: 'column', gap: 6,
                   }}
                 >
-                  <Link href="/cabinet" onClick={() => setDropdownOpen(false)} style={{ fontSize: 13, fontWeight: 600, color: '#8ab4f8', textDecoration: 'none', padding: '6px 8px', borderRadius: 8 }}>
+                  <Link href="/cabinet" onClick={() => setDropdownOpen(false)} style={{ fontSize: 13, fontWeight: 600, color: colors.accent, textDecoration: 'none', padding: '6px 8px', borderRadius: 4 }}>
                     Личный кабинет
                   </Link>
                   <button
                     type="button"
-                    style={{ ...btnBase, width: '100%', textAlign: 'left', borderColor: 'rgba(255,107,107,0.35)', background: 'rgba(255,107,107,0.12)' }}
+                    style={{
+                      ...btnBase,
+                      width: '100%',
+                      textAlign: 'left',
+                      borderColor: colors.status.failure,
+                      background: colors.bg.primary,
+                    }}
                     onClick={() => void handleDisconnect()}
                     disabled={connBusy || wallet.disconnecting || authBusy}
                   >

@@ -12,7 +12,7 @@
 - `TestingCIAgent` и/или `DocsEditorAgent` → **G**
 
 ## Обязательный “файловый маркер результата”
-После выполнения добавь в конец `C:\diploma\DEVELOPMENT_JOURNAL.md` блок:
+После выполнения добавь в конец `DEVELOPMENT_JOURNAL.md` блок:
 
 ```md
 ## Stage 8 (polish) — AgentName
