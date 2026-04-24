@@ -143,52 +143,38 @@ const NODE_BY_ID = Object.fromEntries(NODES.map((n) => [n.tempId, n]));
  */
 const LINKS = [
   // A) Mesh chain
-  { from: 'client-a', to: 'mesh-1', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Client A → Mesh-1' },
-  { from: 'mesh-1', to: 'mesh-2', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Mesh-1 → Mesh-2' },
-  { from: 'mesh-2', to: 'mesh-3', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Mesh-2 → Mesh-3' },
-  { from: 'mesh-3', to: 'mesh-4', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Mesh-3 → Mesh-4' },
-  { from: 'mesh-4', to: 'mesh-5', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Mesh-4 → Mesh-5' },
-  { from: 'mesh-5', to: 'mesh-6', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Mesh-5 → Mesh-6' },
-  { from: 'mesh-6', to: 'merchant-pos', kind: 'mesh', type: 'CABLE_FIBER', name: 'Mesh: Mesh-6 → Merchant POS' },
+  { from: 'client-a', to: 'mesh-1', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Client A → Mesh-1' },
+  { from: 'mesh-1', to: 'mesh-2', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Mesh-1 → Mesh-2' },
+  { from: 'mesh-2', to: 'mesh-3', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Mesh-2 → Mesh-3' },
+  { from: 'mesh-3', to: 'mesh-4', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Mesh-3 → Mesh-4' },
+  { from: 'mesh-4', to: 'mesh-5', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Mesh-4 → Mesh-5' },
+  { from: 'mesh-5', to: 'mesh-6', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Mesh-5 → Mesh-6' },
+  { from: 'mesh-6', to: 'merchant-pos', kind: 'mesh', step: 4, type: 'CABLE_FIBER', name: 'Mesh: Mesh-6 → Merchant POS' },
 
   // B) Primary uplink
-  { from: 'mesh-6', to: 'gateway-primary', kind: 'primary', type: 'CABLE_UNDERGROUND_FIBER', name: 'Primary uplink: Mesh-6 → Gateway-Primary' },
-  { from: 'gateway-primary', to: 'edge-a', kind: 'primary', type: 'CABLE_UNDERGROUND_FIBER', name: 'Primary uplink: Gateway-Primary → Edge Node A' },
-  { from: 'edge-a', to: 'core', kind: 'primary', type: 'CABLE_UNDERGROUND_FIBER', name: 'Primary uplink: Edge Node A → Core' },
+  { from: 'mesh-6', to: 'gateway-primary', kind: 'primary', step: 5, stepRange: [5, 7], type: 'CABLE_UNDERGROUND_FIBER', name: 'Primary uplink: Mesh-6 → Gateway-Primary' },
+  { from: 'gateway-primary', to: 'edge-a', kind: 'primary', step: 6, stepRange: [5, 7], type: 'CABLE_UNDERGROUND_FIBER', name: 'Primary uplink: Gateway-Primary → Edge Node A' },
+  { from: 'edge-a', to: 'core', kind: 'primary', step: 7, stepRange: [5, 7], type: 'CABLE_UNDERGROUND_FIBER', name: 'Primary uplink: Edge Node A → Core' },
 
   // C) Backup uplink
-  { from: 'mesh-3', to: 'gateway-backup', kind: 'backup', type: 'CABLE_UNDERGROUND_COPPER', name: 'Backup uplink: Mesh-3 → Gateway-Backup' },
-  { from: 'gateway-backup', to: 'edge-b', kind: 'backup', type: 'CABLE_UNDERGROUND_COPPER', name: 'Backup uplink: Gateway-Backup → Edge Node B' },
-  { from: 'edge-b', to: 'core', kind: 'backup', type: 'CABLE_UNDERGROUND_COPPER', name: 'Backup uplink: Edge Node B → Core' },
+  { from: 'mesh-3', to: 'gateway-backup', kind: 'backup', step: 5, stepRange: [5, 7], type: 'CABLE_UNDERGROUND_COPPER', name: 'Backup uplink: Mesh-3 → Gateway-Backup' },
+  { from: 'gateway-backup', to: 'edge-b', kind: 'backup', step: 6, stepRange: [5, 7], type: 'CABLE_UNDERGROUND_COPPER', name: 'Backup uplink: Gateway-Backup → Edge Node B' },
+  { from: 'edge-b', to: 'core', kind: 'backup', step: 7, stepRange: [5, 7], type: 'CABLE_UNDERGROUND_COPPER', name: 'Backup uplink: Edge Node B → Core' },
 
   // D) Return / confirmation path
-  { from: 'core', to: 'edge-a', kind: 'return', type: 'CABLE_COPPER', name: 'Return: Core → Edge Node A', offset: 0.0009 },
-  { from: 'edge-a', to: 'gateway-primary', kind: 'return', type: 'CABLE_COPPER', name: 'Return: Edge Node A → Gateway-Primary', offset: 0.0009 },
-  { from: 'gateway-primary', to: 'merchant-pos', kind: 'return', type: 'CABLE_COPPER', name: 'Return: Gateway-Primary → Merchant POS', offset: 0.0009 },
-  { from: 'merchant-pos', to: 'client-a', kind: 'return', type: 'CABLE_COPPER', name: 'Return: Merchant POS → Client A', offset: 0.0009 },
+  { from: 'core', to: 'edge-a', kind: 'return', step: 9, type: 'CABLE_COPPER', name: 'Return: Core → Edge Node A' },
+  { from: 'edge-a', to: 'gateway-primary', kind: 'return', step: 9, type: 'CABLE_COPPER', name: 'Return: Edge Node A → Gateway-Primary' },
+  { from: 'gateway-primary', to: 'merchant-pos', kind: 'return', step: 9, type: 'CABLE_COPPER', name: 'Return: Gateway-Primary → Merchant POS' },
+  { from: 'merchant-pos', to: 'client-a', kind: 'return', step: 9, type: 'CABLE_COPPER', name: 'Return: Merchant POS → Client A' },
 ];
 
 /**
- * Добавляет изгиб к линии, чтобы она не сливалась с параллельным рёбром
- * (например, primary Edge Node A → Core и return Core → Edge Node A).
+ * Линия хранится прямым сегментом; визуальные различия направлений
+ * (primary/backup/return) выполняются на уровне рендера.
  */
-function buildPath(fromNode, toNode, offsetDeg = 0) {
-  const path = [
-    { lat: fromNode.lat, lng: fromNode.lng },
-    { lat: toNode.lat, lng: toNode.lng },
-  ];
-  if (!offsetDeg) return path;
-  const dLat = toNode.lat - fromNode.lat;
-  const dLng = toNode.lng - fromNode.lng;
-  const len = Math.hypot(dLat, dLng) || 1;
-  // Перпендикуляр в плоскости lat/lng: (-dLng, dLat) нормированный.
-  const perpLat = -dLng / len;
-  const perpLng = dLat / len;
-  const midLat = (fromNode.lat + toNode.lat) / 2 + perpLat * offsetDeg;
-  const midLng = (fromNode.lng + toNode.lng) / 2 + perpLng * offsetDeg;
+function buildPath(fromNode, toNode) {
   return [
     { lat: fromNode.lat, lng: fromNode.lng },
-    { lat: midLat, lng: midLng },
     { lat: toNode.lat, lng: toNode.lng },
   ];
 }
@@ -206,6 +192,9 @@ function nodePayload(node) {
     metadata: {
       scenario: 'digital-ruble-offline-minsk',
       role: node.role,
+      step: node.step ?? null,
+      stepRange: node.stepRange ?? null,
+      stepLabel: node.stepLabel ?? null,
       description: node.description ?? null,
       securityModel: {
         keyCustody: 'platform-trusted-contour',
@@ -218,7 +207,7 @@ function nodePayload(node) {
 }
 
 function linkPayload(link, fromNode, toNode) {
-  const path = buildPath(fromNode, toNode, link.offset ?? 0);
+  const path = buildPath(fromNode, toNode);
   return {
     tempId: `${link.from}->${link.to}:${link.kind}`,
     type: link.type,
@@ -235,6 +224,8 @@ function linkPayload(link, fromNode, toNode) {
       isPrimary: link.kind === 'primary',
       isBackup: link.kind === 'backup',
       isReturn: link.kind === 'return',
+      step: link.step ?? null,
+      stepRange: link.stepRange ?? null,
       fromTempId: link.from,
       toTempId: link.to,
       fromName: fromNode.name,
