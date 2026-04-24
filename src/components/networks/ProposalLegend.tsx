@@ -1,8 +1,10 @@
 'use client';
 
+import type { CSSProperties } from 'react';
+
 import { getProposalNodeLegendSvg } from '@/lib/leaflet/proposalNodeIcons';
 
-function lineSample(style: React.CSSProperties) {
+function lineSample(style: CSSProperties) {
   return (
     <span
       style={{

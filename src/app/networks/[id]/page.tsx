@@ -2,7 +2,7 @@
 // Страница /networks/[id] — UI Next.js App Router.
 
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useParams, useRouter } from 'next/navigation';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -22,9 +22,12 @@ import {
   type GlobeLabelCandidate,
 } from '@/lib/three/globeAppearance';
 import { Button } from '@/components/ui/Button';
+import { ProposalLegend } from '@/components/networks/ProposalLegend';
 import { colors } from '@/theme/colors';
 import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { foldProposalActionsForDisplay } from '@/lib/stage7/proposalActionFold';
+import { buildProposalNodeDivIcon } from '@/lib/leaflet/proposalNodeIcons';
+import { addDirectionalArrow } from '@/lib/leaflet/polylineArrow';
 import type L from 'leaflet';
 
 type ViewMode = 'GLOBE_3D' | 'MAP_2D';
@@ -50,11 +53,83 @@ type ActionData = {
 type VoteTally = { for: number; against: number; total: number; userVote: string | null };
 
 type SearchResult = { lat: string; lon: string; display_name?: string };
+type ProposalBounds = {
+  minLat: number;
+  minLng: number;
+  maxLat: number;
+  maxLng: number;
+  center: { lat: number; lng: number };
+  diagDeg: number;
+};
 
 const DEG2RAD = Math.PI / 180;
 
 function isCableType(t: string) {
   return t === 'CABLE_FIBER' || t === 'CABLE_COPPER' || t === 'CABLE_UNDERGROUND_FIBER' || t === 'CABLE_UNDERGROUND_COPPER';
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
+  return v as Record<string, unknown>;
+}
+
+function linkVisual(linkKind: string | null, fallbackType: string) {
+  if (linkKind === 'mesh') return { color: '#3a7bd5', weight2d: 3, dash2d: undefined, dashed3d: false, opacity3d: 0.92, dashSize3d: 0.04, gapSize3d: 0.03 };
+  if (linkKind === 'primary') return { color: '#00e676', weight2d: 4, dash2d: undefined, dashed3d: false, opacity3d: 0.92, dashSize3d: 0.04, gapSize3d: 0.03 };
+  if (linkKind === 'backup') return { color: '#ff7043', weight2d: 3, dash2d: '8,6', dashed3d: true, opacity3d: 0.88, dashSize3d: 0.045, gapSize3d: 0.035 };
+  if (linkKind === 'return') return { color: '#d4a54a', weight2d: 2, dash2d: '2,5', dashed3d: true, opacity3d: 0.9, dashSize3d: 0.02, gapSize3d: 0.028 };
+  const base = CABLE_COLORS[fallbackType] || '#ff9900';
+  const isDashed = fallbackType.includes('UNDERGROUND');
+  return { color: base, weight2d: 3, dash2d: isDashed ? '8,6' : undefined, dashed3d: isDashed, opacity3d: 0.9, dashSize3d: 0.04, gapSize3d: 0.03 };
+}
+
+function computeProposalBounds(elements: Record<string, unknown>[]): ProposalBounds | null {
+  const points: Array<{ lat: number; lng: number }> = [];
+  for (const el of elements) {
+    if (typeof el.lat === 'number' && typeof el.lng === 'number') {
+      points.push({ lat: el.lat, lng: el.lng });
+    }
+    if (Array.isArray(el.path)) {
+      for (const pt of el.path) {
+        const p = asRecord(pt);
+        if (!p) continue;
+        const lat = p.lat;
+        const lng = p.lng;
+        if (typeof lat === 'number' && typeof lng === 'number') {
+          points.push({ lat, lng });
+        }
+      }
+    }
+  }
+  if (points.length === 0) return null;
+  let minLat = points[0]!.lat;
+  let minLng = points[0]!.lng;
+  let maxLat = points[0]!.lat;
+  let maxLng = points[0]!.lng;
+  for (const p of points) {
+    minLat = Math.min(minLat, p.lat);
+    minLng = Math.min(minLng, p.lng);
+    maxLat = Math.max(maxLat, p.lat);
+    maxLng = Math.max(maxLng, p.lng);
+  }
+  const center = { lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 };
+  const diagDeg = Math.hypot(maxLat - minLat, maxLng - minLng);
+  return { minLat, minLng, maxLat, maxLng, center, diagDeg };
+}
+
+function suggestInitialGlobeZoom(diagDeg: number) {
+  if (diagDeg < 0.02) return 1.25;
+  const raw = 1.2 + diagDeg * 1.2;
+  return Math.max(1.15, Math.min(6, raw));
+}
+
+function stepHint(meta: Record<string, unknown> | null) {
+  if (!meta) return '';
+  const stepLabel = typeof meta.stepLabel === 'string' ? meta.stepLabel : '';
+  const step = typeof meta.step === 'number' ? meta.step : null;
+  if (stepLabel) return stepLabel;
+  if (step != null) return `Step ${step}`;
+  return '';
 }
 
 export default function ProposalViewPage() {
@@ -97,6 +172,7 @@ export default function ProposalViewPage() {
     lng: GLOBE_DEFAULT_CENTER.lng,
   });
   const map2DZoom12FromGlobeRef = useRef(false);
+  const autoCenteredProposalRef = useRef<string | null>(null);
 
   const labelCandidatesRef = useRef<GlobeLabelCandidate[]>([]);
 
@@ -174,17 +250,35 @@ export default function ProposalViewPage() {
     } finally { setVoting(false); }
   }, [publicKey, signMessage, id, pubkey, sessionVerified]);
 
-  const proposalElements =
-    proposal?.actions?.length ?
-      foldProposalActionsForDisplay(
-        proposal.actions.map(a => ({
-          id: a.id,
-          actionType: a.actionType,
-          targetElementId: a.targetElementId,
-          elementPayload: a.elementPayload,
-        })),
-      )
-    : [];
+  const proposalElements = useMemo(
+    () =>
+      proposal?.actions?.length
+        ? foldProposalActionsForDisplay(
+            proposal.actions.map((a) => ({
+              id: a.id,
+              actionType: a.actionType,
+              targetElementId: a.targetElementId,
+              elementPayload: a.elementPayload,
+            })),
+          )
+        : [],
+    [proposal],
+  );
+  const proposalBounds = useMemo(
+    () => computeProposalBounds(proposalElements as Record<string, unknown>[]),
+    [proposalElements],
+  );
+
+  useEffect(() => {
+    autoCenteredProposalRef.current = null;
+  }, [id]);
+
+  useEffect(() => {
+    if (!proposalBounds || !proposal || autoCenteredProposalRef.current === proposal.id) return;
+    savedCenterRef.current = proposalBounds.center;
+    zoomLevelRef.current = suggestInitialGlobeZoom(proposalBounds.diagDeg);
+    autoCenteredProposalRef.current = proposal.id;
+  }, [proposalBounds, proposal]);
 
   const getGlobeCenterLatLng = useCallback((): { lat: number; lng: number } => {
     if (globeGroupRef.current) {
@@ -297,21 +391,52 @@ export default function ProposalViewPage() {
     for (const el of proposalElements) {
       const type = el.type as string;
       if (isCableType(type) && Array.isArray(el.path)) {
+        const meta = asRecord(el.metadata);
+        const kind = typeof meta?.linkKind === 'string' ? meta.linkKind : null;
+        const visualStyle = linkVisual(kind, type);
         const pts = (el.path as Array<{ lat: number; lng: number }>)
           .map(p => latLngToVec3(p.lat, p.lng, 1.002))
           .filter(Boolean) as THREE.Vector3[];
         if (pts.length < 2) continue;
-        const colorHex = parseInt((CABLE_COLORS[type] || '#ff9900').replace('#', ''), 16);
-        const isDashed = type.includes('UNDERGROUND');
-        const mat = isDashed
-          ? new THREE.LineDashedMaterial({ color: colorHex, transparent: true, opacity: 0.85, dashSize: 0.04, gapSize: 0.03, clippingPlanes: [clipPlane] })
-          : new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.9, clippingPlanes: [clipPlane] });
+        const colorHex = parseInt(visualStyle.color.replace('#', ''), 16);
+        const mat = visualStyle.dashed3d
+          ? new THREE.LineDashedMaterial({
+              color: colorHex,
+              transparent: true,
+              opacity: visualStyle.opacity3d,
+              dashSize: visualStyle.dashSize3d,
+              gapSize: visualStyle.gapSize3d,
+              clippingPlanes: [clipPlane],
+            })
+          : new THREE.LineBasicMaterial({
+              color: colorHex,
+              transparent: true,
+              opacity: visualStyle.opacity3d,
+              clippingPlanes: [clipPlane],
+            });
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const line = new THREE.Line(geo, mat);
-        if (isDashed) line.computeLineDistances();
+        if (visualStyle.dashed3d) line.computeLineDistances();
         line.frustumCulled = false;
-        line.userData = { elName: el.name, elType: type };
+        line.userData = { elName: el.name, elType: type, elMeta: meta };
         networkGroup.add(line);
+
+        // Directional cone to make flow readable even for overlapping paths.
+        const midSegIdx = Math.floor((pts.length - 1) / 2);
+        const from = pts[midSegIdx];
+        const to = pts[midSegIdx + 1];
+        if (from && to) {
+          const dir = to.clone().sub(from).normalize();
+          const mid = from.clone().lerp(to, 0.5);
+          const cone = new THREE.Mesh(
+            new THREE.ConeGeometry(0.0038, 0.012, 8),
+            new THREE.MeshPhongMaterial({ color: colorHex, emissive: colorHex & 0x2f2f2f, transparent: true, opacity: 0.95 }),
+          );
+          cone.position.copy(mid.clone().add(mid.clone().normalize().multiplyScalar(0.004)));
+          cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+          cone.userData = { elName: el.name, elType: type, elMeta: meta };
+          networkGroup.add(cone);
+        }
       } else if (typeof el.lat === 'number' && typeof el.lng === 'number') {
         const visual = NODE_VISUALS[type];
         if (!visual) continue;
@@ -339,7 +464,7 @@ export default function ProposalViewPage() {
         }
         marker.position.copy(pos);
         marker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-        marker.userData = { elName: el.name, elType: type };
+        marker.userData = { elName: el.name, elType: type, elMeta: asRecord(el.metadata) };
         networkGroup.add(marker);
       }
     }
@@ -365,7 +490,7 @@ export default function ProposalViewPage() {
       globeGroup,
       globeMesh: globeEarthMesh,
       camera,
-      zoomMin: 1.2,
+      zoomMin: 1.15,
       zoomMax: 6,
       onZoomApplied: (z) => {
         zoomLevelRef.current = z;
@@ -406,9 +531,13 @@ export default function ProposalViewPage() {
         }
 
         const t = obj.userData.elType as string;
+        const meta = asRecord(obj.userData.elMeta);
         const label = TYPE_LABELS_RU[t] || t;
         const name = obj.userData.elName || '';
-        tooltipDiv.innerHTML = `<b>${label}</b>${name ? `<br/>${name}` : ''}`;
+        const step = stepHint(meta);
+        const role = typeof meta?.role === 'string' ? meta.role : '';
+        const linkKind = typeof meta?.linkKind === 'string' ? meta.linkKind : '';
+        tooltipDiv.innerHTML = `<b>${label}</b>${name ? `<br/>${name}` : ''}${step ? `<br/><span style="color:#ffd166">${step}</span>` : ''}${role ? `<br/>role: ${role}` : ''}${linkKind ? `<br/>path: ${linkKind}` : ''}`;
         tooltipDiv.style.display = 'block';
         tooltipDiv.style.left = `${e.clientX + 12}px`;
         tooltipDiv.style.top = `${e.clientY + 12}px`;
@@ -473,39 +602,52 @@ export default function ProposalViewPage() {
           const c = savedCenterRef.current;
           map.setView([c.lat, c.lng], 12);
           map2DZoom12FromGlobeRef.current = false;
+        } else if (proposalBounds) {
+          const bounds = L.latLngBounds(
+            [proposalBounds.minLat, proposalBounds.minLng],
+            [proposalBounds.maxLat, proposalBounds.maxLng],
+          );
+          map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17, animate: false });
         }
 
         for (const el of proposalElements) {
           const type = el.type as string;
+          const meta = asRecord(el.metadata);
+          const step = stepHint(meta);
+          const role = typeof meta?.role === 'string' ? meta.role : '';
+          const linkKind = typeof meta?.linkKind === 'string' ? meta.linkKind : '';
           if (isCableType(type) && Array.isArray(el.path)) {
             const pts = (el.path as Array<{ lat: number; lng: number }>).map(p => [p.lat, p.lng] as [number, number]);
             if (pts.length < 2) continue;
-            const color = CABLE_COLORS[type] || '#ff9900';
-            const isDashed = type.includes('UNDERGROUND');
-            L.polyline(pts, { color, weight: 3, dashArray: isDashed ? '8,6' : undefined })
+            const visualStyle = linkVisual(linkKind, type);
+            const line = L.polyline(pts, { color: visualStyle.color, weight: visualStyle.weight2d, dashArray: visualStyle.dash2d })
               .addTo(map)
-              .bindPopup(`<b>${TYPE_LABELS_RU[type] || type}</b>${el.name ? `<br/>${el.name}` : ''}`)
-              .bindTooltip(el.type as string, { sticky: true });
+              .bindPopup(
+                `<b>${TYPE_LABELS_RU[type] || type}</b>${el.name ? `<br/>${el.name}` : ''}${step ? `<br/><span style="color:#f6c177">${step}</span>` : ''}${linkKind ? `<br/>path: ${linkKind}` : ''}`,
+              )
+              .bindTooltip(`${el.type as string}${step ? ` · ${step}` : ''}`, { sticky: true });
+            if (linkKind) {
+              addDirectionalArrow(L, map, pts, { color: visualStyle.color, size: 12 });
+            }
           } else if (typeof el.lat === 'number' && typeof el.lng === 'number') {
-            const v = NODE_VISUALS[type];
-            const c = v ? '#' + v.color.toString(16).padStart(6, '0') : '#ff9900';
             if (type === 'SATELLITE' || type === 'SATELLITE_RASSVET') {
+              const v = NODE_VISUALS[type];
+              const c = v ? '#' + v.color.toString(16).padStart(6, '0') : '#ff9900';
               L.circleMarker([el.lat as number, el.lng as number], {
                 radius: 5, color: c, fillColor: c, fillOpacity: 0.7, weight: 1,
               }).addTo(map)
-                .bindPopup(`<b>${TYPE_LABELS_RU[type] || type}</b>${el.name ? `<br/>${el.name}` : ''}`)
-                .bindTooltip((el.name as string) || type, { sticky: true });
+                .bindPopup(
+                  `<b>${TYPE_LABELS_RU[type] || type}</b>${el.name ? `<br/>${el.name}` : ''}${step ? `<br/><span style="color:#f6c177">${step}</span>` : ''}`,
+                )
+                .bindTooltip(`${(el.name as string) || type}${step ? ` · ${step}` : ''}`, { sticky: true });
             } else {
               L.marker([el.lat as number, el.lng as number], {
-                icon: L.divIcon({
-                  className: '',
-                  html: `<div style="width:14px;height:14px;border-radius:50%;background:${c};border:2px solid #fff;box-shadow:0 0 6px ${c}"></div>`,
-                  iconSize: [14, 14],
-                  iconAnchor: [7, 7],
-                }),
+                icon: buildProposalNodeDivIcon(L, type, role || undefined),
               }).addTo(map)
-                .bindPopup(`<b>${TYPE_LABELS_RU[type] || type}</b>${el.name ? `<br/>${el.name}` : ''}`)
-                .bindTooltip((el.name as string) || type, { sticky: true });
+                .bindPopup(
+                  `<b>${TYPE_LABELS_RU[type] || type}</b>${el.name ? `<br/>${el.name}` : ''}${step ? `<br/><span style="color:#f6c177">${step}</span>` : ''}${role ? `<br/>role: ${role}` : ''}`,
+                )
+                .bindTooltip(`${(el.name as string) || type}${step ? ` · ${step}` : ''}`, { sticky: true });
             }
           }
         }
@@ -521,13 +663,13 @@ export default function ProposalViewPage() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, proposal]);
+  }, [viewMode, proposal, proposalBounds, proposalElements]);
 
   const handleZoom = useCallback((delta: number) => {
     if (viewMode === 'MAP_2D' && mapInstanceRef.current) {
       mapInstanceRef.current.setZoom(mapInstanceRef.current.getZoom() + delta);
     } else if (viewMode === 'GLOBE_3D' && cameraRef.current) {
-      zoomLevelRef.current = Math.max(1.2, Math.min(6, zoomLevelRef.current - delta * 0.5));
+      zoomLevelRef.current = Math.max(1.15, Math.min(6, zoomLevelRef.current - delta * 0.5));
       cameraRef.current.position.z = zoomLevelRef.current;
     }
   }, [viewMode]);
@@ -581,6 +723,15 @@ export default function ProposalViewPage() {
     <div style={{ height: '100vh', width: '100vw', position: 'relative', overflow: 'hidden', background: 'var(--bg)' }}>
       <style>{`
         .proposal-sheet-handle { display: none; }
+        .proposal-node-icon {
+          transition: transform 120ms ease;
+        }
+        .proposal-node-icon:hover {
+          transform: scale(1.12);
+        }
+        .proposal-link-arrow {
+          pointer-events: none;
+        }
         @media (max-width: 767px) {
           .proposal-info-panel {
             position: fixed !important;
@@ -610,6 +761,7 @@ export default function ProposalViewPage() {
           <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
         </div>
       )}
+      <ProposalLegend />
 
       {/* Search */}
       <div className="pv-search-block" style={{ position: 'absolute', top: 62, right: 340, zIndex: 1000, width: 260 }}>
