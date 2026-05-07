@@ -9,7 +9,15 @@ import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 25;
 
-const ALL_STATUSES: ProposalStatus[] = ['DRAFT', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'APPLIED', 'CANCELLED'];
+const ALL_STATUSES: ProposalStatus[] = [
+  'DRAFT',
+  'SUBMITTED',
+  'ACCEPTED',
+  'REJECTED',
+  'APPLIED',
+  'CANCELLED',
+  'WITHDRAWN',
+];
 const ALL_SCOPES: Scope[] = ['GLOBAL', 'LOCAL'];
 
 export async function GET(req: Request) {

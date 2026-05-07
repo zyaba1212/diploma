@@ -29,7 +29,7 @@ export function CopyButton({
   }, [value]);
 
   return (
-    <Button type="button" onClick={() => void onClick()} style={compact ? { padding: '4px 8px', fontSize: 12 } : undefined}>
+    <Button type="button" size={compact ? 'xs' : 'md'} onClick={() => void onClick()}>
       {ok ? `✓ ${copiedLabel}` : label}
     </Button>
   );

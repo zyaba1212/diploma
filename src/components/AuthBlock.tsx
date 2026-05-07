@@ -2,10 +2,12 @@
 
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useCallback, useEffect, useState } from 'react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
 import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { resetAuthSessionClient, signAndVerifyAuthSession } from '@/lib/auth-session';
+import { openPhantomMobileApp, shouldOpenPhantomMobileDeepLink } from '@/lib/wallet-mobile-deeplink';
 import { Button } from './ui/Button';
 
 type ProfileJson = {
@@ -14,6 +16,27 @@ type ProfileJson = {
   inDatabase?: boolean;
   isBanned?: boolean;
 };
+
+const MOBILE_UA_RE = /android|iphone|ipad|ipod/i;
+
+function isMobileBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return MOBILE_UA_RE.test(navigator.userAgent);
+}
+
+function hasInjectedPhantomProvider(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as Window & {
+    phantom?: { solana?: { isPhantom?: boolean } };
+    solana?: { isPhantom?: boolean };
+  };
+  return Boolean(w.phantom?.solana?.isPhantom || w.solana?.isPhantom);
+}
+
+function openPhantomDownloadPage(): void {
+  if (typeof window === 'undefined') return;
+  window.location.assign('https://phantom.app/download');
+}
 
 export function AuthBlock() {
   const wallet = useWallet();
@@ -110,6 +133,11 @@ export function AuthBlock() {
     setConnBusy(true);
     setStatus('подключение…');
     try {
+      if (shouldOpenPhantomMobileDeepLink()) {
+        openPhantomMobileApp();
+        return;
+      }
+
       if (!wallet.wallet) {
         openWalletModal(true);
         setStatus('выберите кошелёк');
@@ -144,6 +172,14 @@ export function AuthBlock() {
       setBusy(false);
     }
   }, [safeErrorMessage, wallet]);
+
+  const phantomWallet = wallet.wallets.find((item) => item.adapter.name === 'Phantom');
+  const showInstallWalletButton =
+    !wallet.connected &&
+    (!phantomWallet ||
+      phantomWallet.readyState === WalletReadyState.NotDetected ||
+      !hasInjectedPhantomProvider()) &&
+    !isMobileBrowser();
 
   return (
     <div
@@ -180,13 +216,23 @@ export function AuthBlock() {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
         {!wallet.connected ? (
-          <Button
-            type="button"
-            onClick={() => void handleConnect()}
-            disabled={busy || connBusy || wallet.connecting}
-          >
-            Подключить кошелёк
-          </Button>
+          <>
+            {showInstallWalletButton ? (
+              <Button
+                type="button"
+                onClick={openPhantomDownloadPage}
+              >
+                УСТАНОВИТЬ КОШЕЛЁК
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              onClick={() => void handleConnect()}
+              disabled={busy || connBusy || wallet.connecting}
+            >
+              Подключить кошелёк
+            </Button>
+          </>
         ) : (
           <>
             <Button

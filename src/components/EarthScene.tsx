@@ -13,6 +13,8 @@ import {
   updateGlobeFrontLabelsVisibility,
 } from '@/lib/three/globeAppearance';
 import { TYPE_LABELS_RU } from '@/lib/three/factories';
+import { NETWORK_LEGEND_GROUPS } from '@/lib/networkLegend/registry';
+import { NetworkLegendItemRow } from '@/lib/networkLegend/render';
 import { colors } from '@/theme/colors';
 import { normalizeLatLng } from '@/lib/geo/normalizeLatLng';
 import {
@@ -22,6 +24,7 @@ import {
   type BboxTuple,
 } from '@/lib/geo/viewportBbox';
 import { applyGlobeCenterToLeafletMap, getFrontGlobeCenterLatLng, syncGlobeToMapCenter } from '@/lib/three/globeMapSync';
+import { applyGlobeZoomDelta } from '@/lib/three/globeZoom';
 import { latLngToVec3, makeTextMesh } from '@/lib/three/utils';
 import { clearGlobeNetworkElements, syncGlobeNetworkElements } from '@/lib/three/syncGlobeNetworkElements';
 import { WORLD_LABELS } from '@/lib/three/labels';
@@ -32,7 +35,17 @@ import type { LatLng, NetworkResponseDTO, Scope } from '@/lib/types';
 import {
   cableSourceLinks,
 } from '@/lib/cableSourceLinks';
+import { fetchGeocodeJson, formatGeocodeClientError } from '@/lib/clientGeocodeFetch';
+import { haversineMeters } from '@/lib/geo/distanceMeters';
+import { quantizeCoordPair } from '@/lib/geo/quantizeCoords';
+import { logMapPerf } from '@/lib/mapModePerf';
 import type L from 'leaflet';
+
+/** Не дергать reverse geocode при мелком сдвиге центра карты (меньше запросов и быстрее UX). */
+const REVERSE_MIN_MOVE_METERS = 220;
+/** Короче старт запроса локации после остановки карты (было 350 ms). */
+const REVERSE_DEBOUNCE_MS = 150;
+const REVERSE_QUERY_DECIMALS = 4;
 
 function isSatelliteElType(t: unknown): boolean {
   return t === 'SATELLITE' || t === 'SATELLITE_RASSVET';
@@ -94,6 +107,7 @@ function osmOperatorFromMetadata(metadata: Record<string, unknown> | null): stri
 const ZOOM_MIN = 1.2;
 const ZOOM_MAX = 6;
 const ZOOM_STEP = 0.25;
+const INITIAL_GLOBE_Z = 3;
 /** Порог смещения указателя (px), после которого жест считается вращением глобуса, а не кликом-«закреплением». */
 const GLOBE_LMB_DRAG_THRESHOLD_PX = 7;
 
@@ -143,64 +157,33 @@ function sourceClassLabel(value: unknown): string | null {
 }
 
 function GlobeLegendBody() {
+  /** Единый источник иконок/линий — `NETWORK_LEGEND_GROUPS`. Та же визуальная семантика, что в /networks/[id] и /sandbox. */
   return (
     <>
       <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12, color: '#eaf2ff' }}>Легенда</div>
-      {[
-        { color: '#3a7bd5', label: 'Подводный оптовол. кабель' },
-        { color: '#d4a54a', label: 'Подводный медный кабель' },
-        { color: '#00e676', label: 'Подземный оптовол. кабель', dashed: true },
-        { color: '#ff7043', label: 'Подземный медный кабель', dashed: true },
-      ].map((item) => (
-        <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span
+      {NETWORK_LEGEND_GROUPS.map((group) => (
+        <div key={group.id} style={{ marginBottom: 6 }}>
+          <div
             style={{
-              width: 18,
-              height: 0,
-              borderTop: `2px ${'dashed' in item && item.dashed ? 'dashed' : 'solid'} ${item.color}`,
-              flexShrink: 0,
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+              textTransform: 'uppercase',
+              color: 'rgba(180,210,255,0.75)',
+              marginBottom: 2,
             }}
-          />
-          <span>{item.label}</span>
-        </div>
-      ))}
-      <div style={{ marginTop: 4, borderTop: '1px solid rgba(120,160,255,0.12)', paddingTop: 4 }} />
-      {[
-        { color: '#3ddc97', label: 'Сервер / Дата-центр', shape: '▮' },
-        { color: '#f6c177', label: 'Коммутатор', shape: '▬' },
-        { color: '#e6a7ff', label: 'Мультиплексор', shape: '⊛' },
-        { color: '#b36cff', label: 'Демультиплексор', shape: '⊛' },
-        { color: '#ffc3a0', label: 'Базовая станция', shape: '▲' },
-        { color: '#7df1ff', label: 'Регенератор', shape: '◻' },
-        { color: '#9fe7ff', label: 'Спутник', shape: '✦' },
-        { color: '#00e5ff', label: 'Mesh-ретранслятор', shape: '◈' },
-        { color: '#ffd740', label: 'SMS-шлюз (2G)', shape: '◇' },
-        { color: '#b388ff', label: 'VSAT-терминал', shape: '⬡' },
-      ].map((item) => (
-        <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ color: item.color, fontSize: 12, width: 14, textAlign: 'center', flexShrink: 0 }}>{item.shape}</span>
-          <span>{item.label}</span>
+          >
+            {group.title}
+          </div>
+          <div style={{ display: 'grid', rowGap: 3 }}>
+            {group.items.map((item) => (
+              <NetworkLegendItemRow key={`${group.id}:${item.type}`} item={item} />
+            ))}
+          </div>
         </div>
       ))}
     </>
   );
-}
-
-async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number): Promise<T> {
-  const controller = new AbortController();
-  const t = window.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) {
-      let msg = `HTTP ${res.status}`;
-      const json = (await res.json().catch(() => null)) as { error?: string } | null;
-      if (json?.error) msg = json.error;
-      throw new Error(msg);
-    }
-    return (await res.json()) as T;
-  } finally {
-    window.clearTimeout(t);
-  }
 }
 
 function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
@@ -211,10 +194,12 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   const frameRef = useRef<number | null>(null);
 
   const [viewMode, setViewMode] = useState<ViewMode>('GLOBE_3D');
-  const [zoom, setZoom] = useState<number>(2.5);
+  const [zoom, setZoom] = useState<number>(INITIAL_GLOBE_Z);
   const [mapZoom, setMapZoom] = useState<number>(2);
   const scope: Scope = 'GLOBAL';
   const [network, setNetwork] = useState<NetworkResponseDTO | null>(null);
+  /** Последний актуальный bbox-fetch карты: пока true — не показываем empty-state от предыдущего viewport. */
+  const [mapNetworkFetchPending, setMapNetworkFetchPending] = useState(false);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [reverseCenter, setReverseCenter] = useState<LatLng | null>(null);
   const [locationLabel, setLocationLabel] = useState<string>('—');
@@ -238,6 +223,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   /** Легенда открывается по клику и по умолчанию свёрнута. */
   const [viewportNarrow, setViewportNarrow] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [globeInitError, setGlobeInitError] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     pinnedElementRef.current = pinnedElement;
@@ -277,13 +263,22 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   /** Центр из кнопки «3D» до перехода — единственный явный источник для sync (порядок относительно onMapUnmount). */
   const pendingGlobeCenterRef = useRef<LatLng | null>(null);
   const networkAbortRef = useRef<AbortController | null>(null);
+  /** Монотонный счётчик запросов `/api/network`; отсекает stale после pan/zoom и abort. */
+  const networkFetchSeqRef = useRef(0);
   const lastGlobeBboxKeyRef = useRef<string>('');
   /** Мышь/тач крутит глобус или pinch — не дергать bbox/fetch и не тяжело обновлять лейблы. */
   const globeInteractionBusyRef = useRef(false);
   /** Тело тика bbox из эффекта ниже — вызов после окончания drag для немедленного resync. */
   const runGlobeBboxTickRef = useRef<(() => void) | null>(null);
+  /**
+   * Guard against rare accidental wheel/pinch events right after clicking +/- buttons.
+   * Those events can invert the first visible zoom step on some devices.
+   */
+  const suppressGestureZoomUntilRef = useRef(0);
   /** После перехода GLOBE_3D → MAP_2D выставить Leaflet zoom 12 в onMapReady. */
   const applyMap2DZoom12Ref = useRef(false);
+  /** Последняя точка, для которой уже запускали reverse geocode (порог смещения). */
+  const lastReverseAnchorRef = useRef<LatLng | null>(null);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
@@ -335,16 +330,30 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     const center = normalizeLatLng(raw.lat, raw.lng);
     savedCenterRef.current = center;
     setTargetCenter(center);
+    lastReverseAnchorRef.current = center;
     setReverseCenter(center);
   }, [globeGroup]);
 
-  const setZoomByDelta = (delta: number) => {
+  const setGlobeZoomByDelta = (zoomDelta: number) => {
     const c = cameraRef.current;
     if (!c) return;
-    const next = THREE.MathUtils.clamp(c.position.z + delta, ZOOM_MIN, ZOOM_MAX);
+    const next = applyGlobeZoomDelta({
+      currentZ: c.position.z,
+      zoomDelta,
+      zoomStep: ZOOM_STEP,
+      minZ: ZOOM_MIN,
+      maxZ: ZOOM_MAX,
+    });
     c.position.z = next;
     setZoom(next);
   };
+  const markButtonZoomIntent = useCallback(() => {
+    const now =
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    suppressGestureZoomUntilRef.current = now + 220;
+  }, []);
 
   const MAP_ZOOM_MIN = 2;
   const MAP_ZOOM_MAX = 19;
@@ -359,18 +368,38 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
+    const coarsePointer = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(GLOBE_SCENE_BACKGROUND_HEX);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 2000);
-    camera.position.set(0, 0, 3);
+    const initialWidth = Math.max(1, mount.clientWidth);
+    const initialHeight = Math.max(1, mount.clientHeight);
+    const camera = new THREE.PerspectiveCamera(60, initialWidth / initialHeight, 0.1, 2000);
+    camera.position.set(0, 0, INITIAL_GLOBE_Z);
     cameraRef.current = camera;
+    setZoom(INITIAL_GLOBE_Z);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, getEarthMaxPixelRatio()));
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: !coarsePointer,
+        alpha: false,
+        powerPreference: coarsePointer ? 'low-power' : 'high-performance',
+      });
+      setGlobeInitError(null);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'WebGL context init failed';
+      setGlobeInitError(msg);
+      setViewMode('MAP_2D');
+      return;
+    }
+    const maxPixelRatio = coarsePointer
+      ? Math.min(1.5, getEarthMaxPixelRatio())
+      : getEarthMaxPixelRatio();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio));
+    renderer.setSize(initialWidth, initialHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.55;
@@ -378,7 +407,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     rendererRef.current = renderer;
     mount.appendChild(renderer.domElement);
 
-    const sphereSegs = getEarthSphereSegments();
+    const sphereSegs = coarsePointer ? Math.min(96, getEarthSphereSegments()) : getEarthSphereSegments();
     const materialMode = getEarthMaterialMode();
 
     const hemi = new THREE.HemisphereLight(0x6b8cff, 0x081022, 0.72);
@@ -397,7 +426,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
 
     // stars
     const starsGeo = new THREE.BufferGeometry();
-    const starCount = 1500;
+    const starCount = coarsePointer ? 900 : 1500;
     const positions = new Float32Array(starCount * 3);
     for (let i = 0; i < starCount; i++) {
       const r = 120 + Math.random() * 600;
@@ -460,10 +489,16 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
       const r = rendererRef.current;
       const c = cameraRef.current;
       if (!m || !r || !c) return;
-      c.aspect = m.clientWidth / m.clientHeight;
+      const width = Math.max(1, m.clientWidth);
+      const height = Math.max(1, m.clientHeight);
+      c.aspect = width / height;
       c.updateProjectionMatrix();
-      r.setSize(m.clientWidth, m.clientHeight);
+      r.setSize(width, height);
     };
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null;
+    resizeObserver?.observe(mount);
+    onResize();
     window.addEventListener('resize', onResize);
 
     let dragging = false;
@@ -749,6 +784,11 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     };
     const onWheel = (e: WheelEvent) => {
       if (viewModeRef.current !== 'GLOBE_3D') return;
+      const now =
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      if (now < suppressGestureZoomUntilRef.current) return;
       e.preventDefault();
       const c = cameraRef.current;
       if (!c) return;
@@ -782,6 +822,14 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
       if (viewModeRef.current !== 'GLOBE_3D') return;
       e.preventDefault();
       if (e.touches.length === 2) {
+        const now =
+          typeof performance !== 'undefined' && typeof performance.now === 'function'
+            ? performance.now()
+            : Date.now();
+        if (now < suppressGestureZoomUntilRef.current) {
+          lastPinchDist = touchDistance(e.touches);
+          return;
+        }
         const d = touchDistance(e.touches);
         if (lastPinchDist > 0) {
           const scale = d / lastPinchDist;
@@ -980,7 +1028,10 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
           }
         }
       }
-      r.render(s, c);
+      // В режиме карты Leaflet сам рисует подложку — не держим WebGL-композитинг каждый кадр.
+      if (viewModeRef.current === 'GLOBE_3D') {
+        r.render(s, c);
+      }
     };
     animate();
 
@@ -988,6 +1039,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
       cancelled = true;
 
       window.removeEventListener('resize', onResize);
+      resizeObserver?.disconnect();
       cancelPendingHoverRaycast();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointerup', onPointerUp);
@@ -1044,6 +1096,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
 
   useEffect(() => {
     if (viewMode !== 'MAP_2D') {
+      lastReverseAnchorRef.current = null;
       setReverseCenter(null);
       setLocationLabel('—');
       setLocationError(null);
@@ -1060,32 +1113,44 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
   useEffect(() => {
     if (viewMode !== 'MAP_2D' || !reverseCenter) return;
     let cancelled = false;
+    const ac = new AbortController();
     // Make the UI feel responsive: show "Определяем локацию…" immediately,
     // while the actual reverse request is still debounced.
     setLocationLoading(true);
     setLocationError(null);
+    const q = quantizeCoordPair(reverseCenter.lat, reverseCenter.lng, REVERSE_QUERY_DECIMALS);
     const t = window.setTimeout(() => {
       void (async () => {
+        const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+        logMapPerf('reverse_fetch_start', { lat: q.lat, lng: q.lng });
         try {
-          const data = await fetchJsonWithTimeout<NominatimReverseResult>(
-            `/api/geocode/reverse?lat=${reverseCenter.lat}&lng=${reverseCenter.lng}`,
-            9000,
+          const data = await fetchGeocodeJson<NominatimReverseResult>(
+            `/api/geocode/reverse?lat=${q.lat}&lng=${q.lng}`,
+            { signal: ac.signal },
           );
           if (cancelled) return;
           setLocationLabel(formatLocationLabel(data));
+          logMapPerf('reverse_fetch_done', {
+            lat: q.lat,
+            lng: q.lng,
+            ms: typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : undefined,
+          });
         } catch (e: unknown) {
           if (cancelled) return;
-          setLocationError(e instanceof Error ? e.message : 'reverse geocode failed');
+          const errText = formatGeocodeClientError(e);
+          if (!errText) return;
+          setLocationError(errText);
           setLocationLabel('—');
         } finally {
           if (!cancelled) setLocationLoading(false);
         }
       })();
-    }, 350);
+    }, REVERSE_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
       window.clearTimeout(t);
+      ac.abort();
     };
   }, [reverseCenter, viewMode]);
 
@@ -1107,6 +1172,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     }
 
     let cancelled = false;
+    const ac = new AbortController();
     setSearchLoading(true);
     setSearchError(null);
     setSearchDropdownVisible(true);
@@ -1114,15 +1180,17 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     const t = window.setTimeout(() => {
       void (async () => {
         try {
-          const data = await fetchJsonWithTimeout<NominatimSearchResult[]>(
+          const data = await fetchGeocodeJson<NominatimSearchResult[]>(
             `/api/geocode/search?q=${encodeURIComponent(q)}`,
-            9000,
+            { signal: ac.signal },
           );
           if (cancelled) return;
           setSearchResults(Array.isArray(data) ? data : []);
         } catch (e: unknown) {
           if (cancelled) return;
-          setSearchError(e instanceof Error ? e.message : 'search failed');
+          const errText = formatGeocodeClientError(e);
+          if (!errText) return;
+          setSearchError(errText);
           setSearchResults([]);
         } finally {
           if (!cancelled) setSearchLoading(false);
@@ -1133,6 +1201,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     return () => {
       cancelled = true;
       window.clearTimeout(t);
+      ac.abort();
       setSearchLoading(false);
     };
   }, [searchQuery, viewMode, searchDropdownVisible]);
@@ -1141,6 +1210,24 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     const n = normalizeLatLng(c.lat, c.lng);
     savedCenterRef.current = { lat: n.lat, lng: n.lng };
     setTargetCenter(n);
+
+    const anchor = lastReverseAnchorRef.current;
+    if (!anchor) {
+      lastReverseAnchorRef.current = n;
+      setReverseCenter((prev) => {
+        if (
+          prev &&
+          Math.abs(prev.lat - n.lat) < 1e-6 &&
+          Math.abs(prev.lng - n.lng) < 1e-6
+        ) {
+          return prev;
+        }
+        return n;
+      });
+      return;
+    }
+    if (haversineMeters(anchor, n) < REVERSE_MIN_MOVE_METERS) return;
+    lastReverseAnchorRef.current = n;
     setReverseCenter((prev) => {
       if (
         prev &&
@@ -1158,6 +1245,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
     const lng = Number(r.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     const n = normalizeLatLng(lat, lng);
+    lastReverseAnchorRef.current = n;
     setTargetCenter(n);
     setReverseCenter((prev) => {
       if (prev && Math.abs(prev.lat - n.lat) < 1e-6 && Math.abs(prev.lng - n.lng) < 1e-6) return prev;
@@ -1182,7 +1270,9 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
 
   const runNetworkFetch = useCallback(
     async (bbox: BboxTuple, z: number) => {
+      const seq = ++networkFetchSeqRef.current;
       setNetworkError(null);
+      setMapNetworkFetchPending(true);
       networkAbortRef.current?.abort();
       const ac = new AbortController();
       networkAbortRef.current = ac;
@@ -1195,10 +1285,16 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
         const r = await fetch(url, { signal: ac.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = (await r.json()) as NetworkResponseDTO;
+        if (seq !== networkFetchSeqRef.current) return;
         setNetwork(data);
       } catch (e: unknown) {
         if (e instanceof Error && e.name === 'AbortError') return;
+        if (seq !== networkFetchSeqRef.current) return;
         setNetworkError(e instanceof Error ? e.message : 'Unknown error');
+      } finally {
+        if (seq === networkFetchSeqRef.current) {
+          setMapNetworkFetchPending(false);
+        }
       }
     },
     [scope],
@@ -1367,8 +1463,9 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                 pendingGlobeCenterRef.current = center;
                 setViewMode('GLOBE_3D');
               }}
+              disabled={viewMode === 'GLOBE_3D'}
             >
-              3D
+              Глобус
             </Button>
             <Button
               onClick={() => {
@@ -1377,13 +1474,15 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                 setMapZoom(12);
                 setViewMode('MAP_2D');
               }}
+              disabled={viewMode === 'MAP_2D'}
             >
-              2D
+              Карта
             </Button>
             <Button
               onClick={() => {
+                markButtonZoomIntent();
                 if (viewMode === 'MAP_2D') setMapZoomByDelta(+1);
-                else setZoomByDelta(-ZOOM_STEP); // closer
+                else setGlobeZoomByDelta(+1); // closer
               }}
               disabled={viewMode === 'MAP_2D' ? mapZoom >= MAP_ZOOM_MAX - 1e-6 : zoom <= ZOOM_MIN + 1e-6}
               title="Ближе"
@@ -1392,8 +1491,9 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
             </Button>
             <Button
               onClick={() => {
+                markButtonZoomIntent();
                 if (viewMode === 'MAP_2D') setMapZoomByDelta(-1);
-                else setZoomByDelta(ZOOM_STEP); // farther
+                else setGlobeZoomByDelta(-1); // farther
               }}
               disabled={viewMode === 'MAP_2D' ? mapZoom <= MAP_ZOOM_MIN + 1e-6 : zoom >= ZOOM_MAX - 1e-6}
               title="Дальше"
@@ -1407,11 +1507,18 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
         </Panel>
         <Panel title="Данные">
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-            {networkError ? (
+            {globeInitError && viewMode === 'MAP_2D' ? (
+              <span style={{ color: 'var(--danger)' }}>
+                3D-глобус недоступен на этом устройстве: {globeInitError}. Переключено на 2D-карту.
+              </span>
+            ) : networkError ? (
               <span style={{ color: 'var(--danger)' }}>network error: {networkError}</span>
             ) : network ? (
               <span>
                 elements: {network.elements.length}
+                {network.meta?.reason != null ? (
+                  <span style={{ color: 'var(--muted)' }}> · {network.meta.reason}</span>
+                ) : null}
               </span>
             ) : (
               <span>loading…</span>
@@ -1441,8 +1548,10 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
           }}
         >
           {pinnedElement ? (
-            <button
+            <Button
               type="button"
+              size="icon-sm"
+              variant="ghost"
               aria-label="Снять закрепление"
               onClick={() => setPinnedElement(null)}
               style={{
@@ -1461,7 +1570,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
               }}
             >
               ×
-            </button>
+            </Button>
           ) : null}
           {globeInfoCard.elName && (
             <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 14 }}>{globeInfoCard.elName}</div>
@@ -1659,9 +1768,10 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                 <div style={{ padding: 8, fontSize: 11, color: 'var(--muted)' }}>Ничего не найдено</div>
               ) : (
                 searchResults.map((r, idx) => (
-                  <button
+                  <Button
                     key={`${r.lat}:${r.lon}:${idx}`}
                     type="button"
+                    size="sm"
                     onClick={() => handleSelectSearchResult(r)}
                     style={{
                       display: 'block',
@@ -1676,7 +1786,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                     }}
                   >
                     {(r.display_name ?? `${r.lat}, ${r.lon}`).slice(0, 80)}
-                  </button>
+                  </Button>
                 ))
               )}
             </div>
@@ -1781,6 +1891,39 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
               onViewportChange={handleMapViewportChange}
               onError={(msg) => setMapLoadError(msg)}
             />
+            {viewMode === 'MAP_2D' &&
+            !mapNetworkFetchPending &&
+            !networkError &&
+            network &&
+            network.elements.length === 0 ? (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: 72,
+                  transform: 'translateX(-50%)',
+                  zIndex: 8,
+                  maxWidth: 'min(420px, calc(100vw - 48px))',
+                  pointerEvents: 'none',
+                  padding: '10px 14px',
+                  borderRadius: 6,
+                  background: colors.bg.card,
+                  border: `1px solid ${colors.border}`,
+                  boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
+                  fontSize: 13,
+                  color: colors.text.primary,
+                  textAlign: 'center',
+                  lineHeight: 1.45,
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>В этом регионе данных нет</div>
+                <div style={{ fontSize: 12, color: colors.text.secondary }}>
+                  Сместите карту или уменьшите масштаб.
+                </div>
+              </div>
+            ) : null}
             {mapLoadError && (
               <div style={{
                 position: 'absolute', inset: 0, display: 'flex',
@@ -1794,8 +1937,9 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                 }}>
                   <p style={{ color: 'var(--danger)', marginBottom: 8 }}>Не удалось загрузить карту</p>
                   <p style={{ fontSize: 12, color: 'var(--muted)' }}>{mapLoadError}</p>
-                  <button
+                  <Button
                     type="button"
+                    size="sm"
                     onClick={() => { setMapLoadError(null); setViewMode('MAP_2D'); }}
                     style={{
                       marginTop: 12, padding: '6px 16px', borderRadius: 4,
@@ -1804,7 +1948,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                     }}
                   >
                     Повторить
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -1888,9 +2032,10 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                   <div style={{ padding: 8, fontSize: 12, color: 'var(--muted)' }}>Ничего не найдено.</div>
                 ) : (
                   searchResults.map((r, idx) => (
-                    <button
+                    <Button
                       key={`${r.lat}:${r.lon}:${idx}`}
                       type="button"
+                      size="sm"
                       onClick={() => handleSelectSearchResult(r)}
                       style={{
                         width: '100%',
@@ -1905,7 +2050,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                       }}
                     >
                       {r.display_name ?? `${r.lat}, ${r.lon}`}
-                    </button>
+                    </Button>
                   ))
                 )}
               </div>
@@ -1938,9 +2083,10 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
               { label: '\u2198', dx: 100, dy: 100 },
             ].map((dir, i) =>
               dir.label ? (
-                <button
+                <Button
                   key={i}
                   type="button"
+                  size="icon-md"
                   onClick={() => leafletMapRef.current?.panBy([dir.dx, dir.dy])}
                   style={{
                     width: 36,
@@ -1957,7 +2103,7 @@ function EarthSceneComponent({ satelliteNameQuery = null }: EarthSceneProps) {
                   }}
                 >
                   {dir.label}
-                </button>
+                </Button>
               ) : (
                 <div key={i} />
               ),

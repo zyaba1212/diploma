@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server';
+import { createCorrelationId, internalApiError } from '@/lib/apiError';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
-import { circuitFetch } from '@/lib/circuitBreaker';
-import { internalApiError } from '@/lib/apiError';
-import { getCachedGeocode, setCachedGeocode } from '@/lib/geocodeCache';
+import {
+  getCachedGeocode,
+  setCachedGeocode,
+  tryGetGeocodeFromRedis,
+} from '@/lib/geocodeCache';
+import { GEOCODE_MEMORY_TTL_NEARBY_MS } from '@/lib/geocode/constants';
+import { runNominatimJson } from '@/lib/geocode/nominatimUpstream';
+import { logGeocodeServerEvent } from '@/lib/geocode/observability';
+
+export const maxDuration = 60;
 
 type NearbyLabel = {
   lat: string;
@@ -12,8 +20,9 @@ type NearbyLabel = {
 };
 
 export async function GET(req: Request) {
+  const correlationId = createCorrelationId();
   const clientIp = getClientIp(req);
-  if (!(await checkRateLimit(`geocode.nearby:${clientIp}`, 30, 60_000))) {
+  if (!(await checkRateLimit(`geocode.nearby:${clientIp}`, 60, 60_000))) {
     return NextResponse.json({ error: 'rate limit exceeded' }, { status: 429 });
   }
 
@@ -34,17 +43,46 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'invalid radiusKm' }, { status: 400 });
   }
 
-  // Prevent unreasonable fan-out / cache explosion.
   if (radiusKm > 200) {
     return NextResponse.json({ error: 'radiusKm too large' }, { status: 400 });
   }
 
-  // Currently we return a minimal "nearby labels" list using reverse geocoding for the center.
-  // `radiusKm` is part of the cache key to preserve caller intent.
   const cacheKey = `geocode:nearby:lat:${lat}:lng:${lng}:r:${radiusKm}`;
-  const cached = getCachedGeocode<NearbyLabel[]>(cacheKey);
-  if (cached) {
-    return NextResponse.json(cached, { headers: { 'cache-control': 'no-store' } });
+  const mem = getCachedGeocode<NearbyLabel[]>(cacheKey);
+  if (mem) {
+    logGeocodeServerEvent({
+      route: 'nearby',
+      durationMs: 0,
+      outcome: 'cache_memory_hit',
+      correlationId,
+    });
+    return NextResponse.json(mem, {
+      headers: {
+        'cache-control': 'no-store',
+        'x-correlation-id': correlationId,
+        'x-geocode-cache': 'memory',
+        'x-geocode-outcome': 'cache_memory_hit',
+      },
+    });
+  }
+
+  const redisHit = await tryGetGeocodeFromRedis<NearbyLabel[]>(cacheKey);
+  if (redisHit) {
+    setCachedGeocode(cacheKey, redisHit, GEOCODE_MEMORY_TTL_NEARBY_MS);
+    logGeocodeServerEvent({
+      route: 'nearby',
+      durationMs: 0,
+      outcome: 'cache_redis_hit',
+      correlationId,
+    });
+    return NextResponse.json(redisHit, {
+      headers: {
+        'cache-control': 'no-store',
+        'x-correlation-id': correlationId,
+        'x-geocode-cache': 'redis',
+        'x-geocode-outcome': 'cache_redis_hit',
+      },
+    });
   }
 
   const upstream = new URL('https://nominatim.openstreetmap.org/reverse');
@@ -52,38 +90,44 @@ export async function GET(req: Request) {
   upstream.searchParams.set('lon', String(lng));
   upstream.searchParams.set('format', 'json');
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const result = await runNominatimJson<NearbyLabel[]>({
+    routeLabel: 'nearby',
+    circuitKey: 'geocode:nearby',
+    cacheKey,
+    upstreamUrl: upstream,
+    ttlMs: GEOCODE_MEMORY_TTL_NEARBY_MS,
+    correlationId,
+    transform: (raw: unknown) => {
+      const data = raw as Record<string, unknown>;
+      const label: NearbyLabel = {
+        lat: String(data?.lat ?? String(lat)),
+        lon: String(data?.lon ?? String(lng)),
+        display_name: typeof data?.display_name === 'string' ? data.display_name : undefined,
+        type: typeof data?.type === 'string' ? data.type : undefined,
+      };
+      return [label];
+    },
+  });
 
-  try {
-    const r = await circuitFetch(`geocode:nearby`, () =>
-      fetch(upstream, {
-        signal: controller.signal,
-        headers: {
-          'user-agent': 'diploma-z96a/1.0',
-          accept: 'application/json',
-        },
-        cache: 'no-store',
-      }),
-    );
-
-    if (!r.ok) return internalApiError('upstream error', 502);
-
-    const data = (await r.json()) as any;
-    const label: NearbyLabel = {
-      lat: String(data?.lat ?? String(lat)),
-      lon: String(data?.lon ?? String(lng)),
-      display_name: typeof data?.display_name === 'string' ? data.display_name : undefined,
-      type: typeof data?.type === 'string' ? data.type : undefined,
-    };
-
-    const labels = [label];
-    setCachedGeocode(cacheKey, labels);
-    return NextResponse.json(labels, { headers: { 'cache-control': 'no-store' } });
-  } catch {
-    return internalApiError('nearby geocode failed', 502);
-  } finally {
-    clearTimeout(timeout);
+  if (!result.ok) {
+    const msg =
+      result.message === 'upstream error'
+        ? 'nearby geocode failed'
+        : result.message === 'geocode temporarily unavailable'
+          ? 'geocode temporarily unavailable'
+          : 'nearby geocode failed';
+    return internalApiError(msg, 502, correlationId);
   }
-}
 
+  const headers: Record<string, string> = {
+    'cache-control': 'no-store',
+    'x-correlation-id': correlationId,
+    'x-geocode-ms': String(result.durationMs),
+    'x-geocode-outcome': result.outcome,
+  };
+  if (result.outcome === 'stale_fallback') {
+    headers['x-geocode-stale'] = '1';
+  }
+
+  return NextResponse.json(result.data, { headers });
+}

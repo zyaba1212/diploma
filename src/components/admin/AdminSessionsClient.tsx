@@ -268,8 +268,10 @@ export function AdminSessionsClient() {
                   }}
                 >
                   {pk}
-                  <button
+                  <Button
                     type="button"
+                    size="xs"
+                    variant="ghost"
                     onClick={() => void copyPubkey(rk, pk)}
                     title={title}
                     aria-label={title}
@@ -285,7 +287,7 @@ export function AdminSessionsClient() {
                     }}
                   >
                     {copied ? '✓' : '⧉'}
-                  </button>
+                  </Button>
                 </span>
               );
             },

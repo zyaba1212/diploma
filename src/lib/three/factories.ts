@@ -148,6 +148,15 @@ export function createBaseStationObject(size: number, color: number, emissive: n
   top.position.y = s * 0.85;
   g.add(top);
 
+  // Tri-sector antenna crown for quicker BTS silhouette recognition.
+  for (let i = 0; i < 3; i++) {
+    const angle = (i / 3) * Math.PI * 2;
+    const sector = new THREE.Mesh(new THREE.BoxGeometry(s * 0.12, s * 0.28, s * 0.03), metalMat());
+    sector.position.set(Math.cos(angle) * s * 0.16, s * 0.72, Math.sin(angle) * s * 0.16);
+    sector.rotation.y = angle;
+    g.add(sector);
+  }
+
   const angles = [-1, 0, 1];
   angles.forEach((dx, idx) => {
     const panel = new THREE.Mesh(new THREE.BoxGeometry(s * 0.35, s * 0.15, s * 0.04), pMat);
@@ -294,6 +303,50 @@ export function createMultiplexerObject(size: number, color: number, emissive: n
   return g;
 }
 
+/* ─── DEMULTIPLEXER ───────────────────────────────────────────────────── */
+
+export function createDemultiplexerObject(size: number, color: number, emissive: number): THREE.Object3D {
+  const s = safeS(size);
+  const g = new THREE.Group();
+  const mat = bodyMat(color, emissive);
+
+  // Inverse frustum + fan-out arms so DEMUX is distinct from MUX.
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.42, s * 0.22, s * 0.75, 14), mat);
+  g.add(body);
+
+  const midRing = new THREE.Mesh(new THREE.TorusGeometry(s * 0.28, s * 0.03, 8, 20), metalMat());
+  midRing.rotation.x = Math.PI / 2;
+  midRing.position.y = s * 0.02;
+  g.add(midRing);
+
+  const inPort = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.045, s * 0.045, s * 0.2, 8), metalMat());
+  inPort.position.y = s * 0.48;
+  g.add(inPort);
+
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2;
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.018, s * 0.018, s * 0.28, 6), metalMat());
+    arm.position.set(Math.cos(angle) * s * 0.26, -s * 0.31, Math.sin(angle) * s * 0.26);
+    arm.rotation.z = Math.cos(angle) * 0.55;
+    arm.rotation.x = Math.sin(angle) * 0.55;
+    g.add(arm);
+
+    const out = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.03, s * 0.03, s * 0.08, 6), darkMat());
+    out.position.set(Math.cos(angle) * s * 0.38, -s * 0.42, Math.sin(angle) * s * 0.38);
+    g.add(out);
+  }
+
+  const statusStrip = new THREE.Mesh(new THREE.BoxGeometry(s * 0.22, s * 0.08, s * 0.01), screenMat());
+  statusStrip.position.set(0, s * 0.05, s * 0.24);
+  g.add(statusStrip);
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.46, s * 0.46, s * 0.04, 14), metalMat());
+  base.position.y = -s * 0.41;
+  g.add(base);
+
+  return g;
+}
+
 /* ─── PROVIDER ────────────────────────────────────────────────────────── */
 
 export function createProviderObject(size: number, color: number, emissive: number): THREE.Object3D {
@@ -367,6 +420,15 @@ export function createRegeneratorObject(size: number, color: number, emissive: n
   const ampModule = new THREE.Mesh(new THREE.BoxGeometry(s * 0.5, s * 0.2, s * 0.3), new THREE.MeshPhongMaterial({ color: 0x44aacc, emissive: 0x113344, shininess: 60 }));
   ampModule.position.y = s * 0.1;
   g.add(ampModule);
+
+  const pulseCoreA = new THREE.Mesh(new THREE.ConeGeometry(s * 0.08, s * 0.14, 8), metalMat());
+  pulseCoreA.position.set(0, s * 0.1, 0);
+  pulseCoreA.rotation.x = Math.PI / 2;
+  g.add(pulseCoreA);
+  const pulseCoreB = new THREE.Mesh(new THREE.ConeGeometry(s * 0.08, s * 0.14, 8), metalMat());
+  pulseCoreB.position.set(0, s * 0.1, 0);
+  pulseCoreB.rotation.x = -Math.PI / 2;
+  g.add(pulseCoreB);
 
   for (const dx of [-1, 1]) {
     const port = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.04, s * 0.04, s * 0.12, 8), metalMat());
@@ -610,6 +672,11 @@ export function createSmsGatewayObject(size: number, color: number, emissive: nu
     g.add(tip);
   }
 
+  const gatewayArch = new THREE.Mesh(new THREE.TorusGeometry(s * 0.28, s * 0.02, 8, 18, Math.PI), metalMat());
+  gatewayArch.position.set(0, s * 0.18, s * 0.22);
+  gatewayArch.rotation.x = Math.PI;
+  g.add(gatewayArch);
+
   for (let i = 0; i < 4; i++) {
     const led = new THREE.Mesh(new THREE.SphereGeometry(s * 0.02, 6, 6), i < 2 ? ledGreen() : ledAmber());
     led.position.set(-s * 0.15 + i * s * 0.1, s * 0.3, s * 0.21);
@@ -764,7 +831,7 @@ export const EQUIPMENT_FACTORIES: Record<string, (size: number, color: number, e
   BASE_STATION: createBaseStationObject,
   SWITCH: createSwitchObject,
   MULTIPLEXER: createMultiplexerObject,
-  DEMULTIPLEXER: createMultiplexerObject,
+  DEMULTIPLEXER: createDemultiplexerObject,
   PROVIDER: createProviderObject,
   REGENERATOR: createRegeneratorObject,
   REGENERATION_POINT: createRegeneratorObject,

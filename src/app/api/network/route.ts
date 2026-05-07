@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { Prisma, type NetworkElementType, type Scope } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { pathIntersectsBbox, type BboxTuple } from '@/lib/geo/viewportBbox';
+import type { NetworkMetaReason } from '@/lib/types';
 
 const OFFICIAL_DATASETS = new Set([
   'open_undersea_cable_map',
@@ -206,6 +207,8 @@ export async function GET(req: Request) {
     const byId = new Map<string, (typeof nodesInBbox)[0]>();
     for (const n of nodesInBbox) byId.set(n.id, n);
     for (const c of cablesFiltered) byId.set(c.id, c);
+    /** Узлы/кабели, попавшие в окно до фильтра по dataset / underground. */
+    const mergedCandidateCount = byId.size;
     const undergroundRejectionStats = new Map<string, number>();
     const elements = [...byId.values()].filter((el) => {
       if (!isEligibleDatasetForNetwork(el.metadata)) return false;
@@ -230,7 +233,22 @@ export async function GET(req: Request) {
       });
     }
 
-    return NextResponse.json({ providers, elements }, { headers: { 'cache-control': 'no-store' } });
+    let reason: NetworkMetaReason;
+    if (elements.length > 0) {
+      reason = 'ok';
+    } else if (mergedCandidateCount === 0) {
+      reason = 'empty_viewport';
+    } else {
+      reason = 'filtered_out';
+    }
+
+    const meta = {
+      worldish: Boolean(worldish),
+      reason,
+      bbox: [minLat, minLng, maxLat, maxLng] as [number, number, number, number],
+    };
+
+    return NextResponse.json({ providers, elements, meta }, { headers: { 'cache-control': 'no-store' } });
   } catch (err) {
     console.error('GET /api/network failed', err);
     return NextResponse.json({ error: 'internal error' }, { status: 500 });

@@ -52,8 +52,19 @@ export type NetworkElementDTO = {
   metadata?: Record<string, unknown> | null;
 };
 
+/** Причина состояния bbox-ответа `/api/network` (ветка с `bbox=`). */
+export type NetworkMetaReason = 'ok' | 'empty_viewport' | 'filtered_out';
+
+/** Диагностический контекст для bbox-запросов; клиенты могут игнорировать. */
+export type NetworkMeta = {
+  worldish: boolean;
+  reason: NetworkMetaReason;
+  bbox: [number, number, number, number];
+};
+
 export type NetworkResponseDTO = {
   providers: NetworkProviderDTO[];
   elements: NetworkElementDTO[];
+  meta?: NetworkMeta;
 };
 

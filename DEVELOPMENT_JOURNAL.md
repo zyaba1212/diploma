@@ -2,6 +2,128 @@
 
 Короткие заметки по решениям и граблям, чтобы агенты не повторяли ошибки.
 
+## Песочница: панели «Действия» сверху слева, «Режим» снизу слева (2026-05-07)
+
+- [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx): два оверлея (`.sandbox-map-overlay-actions` / `.sandbox-map-overlay-mode`); на узкой ширине нижний блок `bottom: 70px`, чтобы не пересекаться с ☰.
+
+## Песочница: хоткеи по `e.code` + панель «Режим» сверху слева (2026-05-07)
+
+- [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx): undo/redo по **физическим клавишам** (`KeyZ`/`KeyY`), чтобы работало при русской раскладке; блок с картой/глобусом и историей перенесён с `bottom:12` на `top:60` (зазор под шапку ~52px), `maxWidth` для узких экранов.
+
+## Песочница: Undo/Redo + «К началу» (серверный head при открытии) (2026-05-07)
+
+- **Клиент:** [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx) — история `past/present/future` для снимка `{ elements, selectedType, cableFromId }`; добавление/удаление/drag узлов и кабелей через `applyEditMutation` (новый шаг очищает `future`). Смена типа элемента в панели и выбор первого узла кабеля — `patchPresent` (без записи в историю). База **«К началу»**: `serverBaselineSnapshotRef` = граф с сервера (`proposalActionsToSandboxElementsFolded`) при успешной загрузке предложения; прыжок undoable. Хоткеи: Ctrl/Cmd+Z, Ctrl+Y, Ctrl/Cmd+Shift+Z; не срабатывают в input/textarea/select/contentEditable. Всё отключено при `sandboxInteractionLocked`. В начале fetch по `proposalId` baseline обнуляется (нет утечки между id).
+
+## MAP_2D: пустой viewport — `meta` в `/api/network` + UX без авто-pan (2026-05-07)
+
+- **API:** [`src/app/api/network/route.ts`](src/app/api/network/route.ts) — для ветки с `bbox=` в JSON добавлен **`meta`**: `worldish`, `reason` (`ok` \| `empty_viewport` \| `filtered_out`), эхо `bbox`. Пустой регион без кандидатов → `empty_viewport`; кандидаты есть, но все отсеяны по dataset/underground → `filtered_out`. Листинг без `bbox` без изменений (без `meta`).
+- **Типы:** [`src/lib/types.ts`](src/lib/types.ts) — `NetworkMeta`, `NetworkMetaReason`, опциональный `meta` в `NetworkResponseDTO`.
+- **Клиент:** [`EarthScene.tsx`](src/components/EarthScene.tsx) — счётчик запросов + `finally` только для последнего seq (race/abort); `mapNetworkFetchPending`; баннер «В этом регионе данных нет» только в **MAP_2D** при успешном ответе и `elements.length===0`, скрыт при загрузке и при ошибке сети.
+- **Доки:** [`docs/map-mode-benchmark.md`](docs/map-mode-benchmark.md) (acceptance empty viewport + curl `meta`), [`docs/operations.md`](docs/operations.md) (контракт).
+
+## MAP_2D: стабилизация таймаута геокодера + Leaflet layout (2026-05-07)
+
+- **Клиент:** [`src/lib/clientGeocodeFetch.ts`](src/lib/clientGeocodeFetch.ts) — разделены `GeocodeClientDeadlineError` / `GeocodeClientSupersededError`, ответы API через `GeocodeHttpError` + поле `code`; ложный «таймаут» при superseded не показывается (`formatGeocodeClientError` → пустая строка). [`EarthScene.tsx`](src/components/EarthScene.tsx) не ставит `locationError`/`searchError`, если текст пустой.
+- **Карта:** [`MapView.tsx`](src/components/MapView.tsx) — `invalidateSize` после init (двойной rAF), `ResizeObserver` + debounce, после `setView`/`fitBounds`.
+- **Сервер:** [`internalApiError`](src/lib/apiError.ts) — опциональный `code` в JSON и `x-geocode-code`; [`reverse/route.ts`](src/app/api/geocode/reverse/route.ts) маппит `outcome` upstream на стабильные коды.
+- **Константы:** [`GEOCODE_CLIENT_FETCH_TIMEOUT_MS`](src/lib/geocode/constants.ts) поднят до **18s** (запас над upstream 10s).
+- **Доки:** [`docs/map-mode-benchmark.md`](docs/map-mode-benchmark.md) (baseline-таблица), [`docs/operations.md`](docs/operations.md).
+
+## Режим карты: ускорение MAP_2D (2026-05-07)
+
+- **Leaflet:** [`MapView.tsx`](src/components/MapView.tsx) — инкрементальное обновление overlay по `element.id` + сигнатура (без `clearLayers` на каждый bbox); кабели/узлы вынесены в `renderCableOverlayGroup` / `renderNodeOverlayGroup`.
+- **Globe→карта:** [`EarthScene.tsx`](src/components/EarthScene.tsx) — `lastReverseAnchorRef` синхронизируется в `setMapCenterFromGlobe`, чтобы не дёргать reverse лишний раз после переключения режима.
+- **Tile API:** [`src/app/api/tile/route.ts`](src/app/api/tile/route.ts) — лимит по умолчанию **4000/60s** на IP (`TILE_RATE_LIMIT_*`), `circuitFetch` с [`TILE_CIRCUIT_OPTS`](src/lib/tile/tileConstants.ts), structured logs + `correlationId`, fallback OSM с тем же таймаутом/headers.
+- **Логи:** [`observability.ts`](src/lib/tile/observability.ts) — `rate_limited`; успешные тайлы только при `TILE_DEBUG_LOG=1|verbose`.
+- **Доки:** [`docs/map-mode-benchmark.md`](docs/map-mode-benchmark.md), [`docs/operations.md`](docs/operations.md) §4.5.
+
+## Geocode: стабилизация таймаутов + Redis + stale-if-error (2026-05-07)
+
+- **Клиент:** [`src/lib/clientGeocodeFetch.ts`](src/lib/clientGeocodeFetch.ts) — дедлайн 14s, объединённый `AbortSignal` (supersede при смене центра/поиска), сообщения UX вместо сырого `signal is aborted without reason`. [`EarthScene.tsx`](src/components/EarthScene.tsx) переведён на этот helper.
+- **Сервер:** [`src/lib/geocode/nominatimUpstream.ts`](src/lib/geocode/nominatimUpstream.ts) — upstream 10s, circuit breaker смягчён ([`constants.ts`](src/lib/geocode/constants.ts)), coalescing ([`inflightCoalesce.ts`](src/lib/geocode/inflightCoalesce.ts)), structured logs ([`observability.ts`](src/lib/geocode/observability.ts)).
+- **Кэш:** [`geocodeCache.ts`](src/lib/geocodeCache.ts) — опциональный Redis L2 + stale backup 7d; `GEOCODE_DISABLE_REDIS=1` отключает Redis для geocode.
+- **Документация:** [`docs/geocode-operations.md`](docs/geocode-operations.md); [`internalApiError`](src/lib/apiError.ts) принимает опциональный `correlationId`.
+- **Мелочь:** [`Button.tsx`](src/components/ui/Button.tsx) — tone `warning` использует `colors.status.offline` (в палитре не было `status.warning`).
+
+## Песочница: «Обновить текущее» только ревизия графа (2026-05-07)
+
+- В [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx) таб **«Обновить текущее»** — только сообщение коммита и `POST .../revisions` (+ `submit-draft` для `DRAFT`/`WITHDRAWN`). Поля названия/описания карточки убраны; `handleSaveInCurrentProposal` **не** вызывает `PATCH` метаданных. Править title/description можно в табе «Новое предложение» (fork) или вне этого сценария.
+
+## SUBMITTED: in-place правки графа при голосах / on-chain (2026-05-07)
+
+- **Политика:** в [`src/lib/stage7/proposalMutationPolicy.ts`](src/lib/stage7/proposalMutationPolicy.ts) для `SUBMITTED` `canReplaceActionsViaSandboxSync` (и алиасы revisions / PATCH метаданных) всегда `true`, независимо от `voteCount` и `onChainTxSignature`.
+- **Риск governance / Stage 6:** голоса и ранее зафиксированный `contentHash` могли относиться к старому содержимому; после `POST .../revisions` или `sync-actions` `contentHash` пересчитывается — off-chain состояние может расходиться с тем, что подразумевали голосующие или on-chain memo. Осознанный компромисс для удобства правок сети в песочнице.
+- **UI:** [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx) — сообщения «только fork» применимы к статусам, где commit по-прежнему запрещён (не из-за голосов на `SUBMITTED`).
+
+## Песочница: модалка сохранения по сценариям (2026-05-07)
+
+- Раздельные режимы в [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx): «Обновить текущее» (только коммит → ревизия, без PATCH title/desc) и «Новое предложение» (title/desc для fork); fork API получает авто-`message`. Ручной чек: новая сцена без `proposalId`; `canCommitInPlace` / только fork; конфликт ревизий 409.
+
+## ProposalRevision: git-подобная история песочницы + fork (2026-05-07)
+
+- **Модель:** `ProposalRevision` + `Proposal.headRevisionId`, `Proposal.forkedFromProposalId` ([`prisma/schema.prisma`](prisma/schema.prisma)), миграция [`prisma/migrations/20260507120000_proposal_revision/migration.sql`](prisma/migrations/20260507120000_proposal_revision/migration.sql). Baseline создаётся лениво при первом `POST .../revisions` ([`src/lib/stage7/proposalRevisionSnapshot.ts`](src/lib/stage7/proposalRevisionSnapshot.ts)).
+- **API:** `GET|POST /api/proposals/[id]/revisions`, `GET .../revisions/[revisionId]`, `POST .../fork` ([`src/app/api/proposals/[id]/revisions/route.ts`](src/app/api/proposals/[id]/revisions/route.ts) и др.). Optimistic lock: `baseRevisionId` + код `revision_conflict` (409). Общая замена actions: [`src/lib/stage7/replaceProposalSandboxCreates.ts`](src/lib/stage7/replaceProposalSandboxCreates.ts) (используется и в `sync-actions`).
+- **Политика:** [`src/lib/stage7/proposalMutationPolicy.ts`](src/lib/stage7/proposalMutationPolicy.ts) — `canInteractEditSandboxProposal` (широкий UI) vs `canCommitProposalGraphRevision` (commit/revisions/sync; для `SUBMITTED` всегда разрешено, см. запись «SUBMITTED: in-place правки…» выше).
+- **UI:** песочница — два сценария сохранения при редактировании; `/networks/[id]` — блок «История правок сети».
+- **Smoke:** `npm run test:proposals-revisions` ([`scripts/test-proposals-revisions-smoke.mjs`](scripts/test-proposals-revisions-smoke.mjs)) при поднятом `npm run dev` и применённых миграциях.
+
+## Withdraw + песочница: гидрация и переключатель сетей (2026-05-07)
+
+- **Withdraw:** [`src/app/api/proposals/[id]/withdraw/route.ts`](src/app/api/proposals/[id]/withdraw/route.ts) — идемпотентность для уже `WITHDRAWN`, `updateMany` только из `SUBMITTED`, удаление голосов в транзакции, маппинг Prisma/enum-drift → JSON `code: SCHEMA_ENUM_MISSING` (503) вместо глухого internal error.
+- **Список для селектора:** [`src/app/api/proposals/route.ts`](src/app/api/proposals/route.ts) — в выборке списка добавлены `onChainTxSignature` и `_count.votes` для политики редактирования.
+- **Гидрация:** [`src/lib/sandbox/foldedDisplayToSandboxElements.ts`](src/lib/sandbox/foldedDisplayToSandboxElements.ts) — импорт в песочницу через `foldProposalActionsForDisplay`, не только CREATE; пустой session draft по proposal не перетирает сервер.
+- **Песочница UX:** [`src/app/sandbox/page.tsx`](src/app/sandbox/page.tsx) — селект «Мои построенные сети», навигация `/sandbox` ↔ `?proposalId=`, блокировка редактирования (карта/глобус/сохранение) при недопустимом статусе (`canInteractEditSandboxProposal`); `/sandbox` без id — пустой global draft.
+- **Предложения:** [`src/app/networks/page.tsx`](src/app/networks/page.tsx), [`src/app/networks/[id]/page.tsx`](src/app/networks/[id]/page.tsx) — сообщение при `SCHEMA_ENUM_MISSING`, исправлено двойное чтение тела ответа при withdraw на странице детали.
+
+## Песочница: Leaflet ↔ состояние и session draft (2026-05-07)
+
+- **Проблема:** при переключении «Карта» ↔ «Глобус» карта пересоздавалась, `leafletLayersRef` очищался, маркеры не восстанавливались из `elements` (в сайдбаре узлы оставались). При уходе со `/sandbox` состояние терялось — только `useState` без персистенции.
+- **Решение:** единая синхронизация `syncLeafletFromElements` — по `elements` пересобираются маркеры и кабели; клик по карте только обновляет React-state. Черновик в `sessionStorage` под ключом `sandbox-draft-v1` ([`src/lib/sandbox/sandboxDraft.ts`](src/lib/sandbox/sandboxDraft.ts)): elements, selectedType, cableFromId, viewMode, savedCenter, mapZoom. Восстановление в `useLayoutEffect` до первого Leaflet; запись в `useEffect` после `sandboxHydratedRef`, чтобы не затереть черновик пустым состоянием до restore.
+- **Проверка:** `npx tsc --noEmit`, `npm run lint`. Ручной сценарий: узлы на карте → Глобус → Карта (маркеры на месте); разместить узлы → перейти на главную → снова Песочница (черновик восстановлен в той же вкладке).
+
+## Логический дамп БД: `db-export/diploma.sql` (2026-04-24)
+
+- **Формат:** как раньше — plain SQL от `pg_dump` (заголовок «PostgreSQL database dump», строка `\restrict …`, `SET …`, DDL, данные через `COPY … FROM stdin`).
+- **Команда (Windows, `pg_dump` не в PATH, Docker Desktop):** образ `postgres:16`, обход стандартного entrypoint (иначе `exec format error`):  
+  `docker run --rm --entrypoint pg_dump --add-host=host.docker.internal:host-gateway -v "c:/diploma2/diploma/db-export:/dump" -e PGPASSWORD=postgres postgres:16 -h host.docker.internal -p 5432 -U postgres -d diploma -F p -f /dump/diploma.sql`
+- **Итог:** перезаписан [`db-export/diploma.sql`](db-export/diploma.sql); сервер БД 16.12, клиент в образе 16.13.
+
+## Коррекция: возвращён обычный спутник в seed (2026-04-24)
+
+- **Причина коррекции:** удаление спутника из proposal-сценария оказалось избыточным; требовалась не деактивация спутникового узла, а отказ от акцента на «Рассвет» как отдельном брендовом элементе.
+- **Что исправлено:** в [`scripts/seed-digital-ruble-offline-minsk.mjs`](scripts/seed-digital-ruble-offline-minsk.mjs) возвращён спутниковый узел как универсальный `SATELLITE` (`tempId: 'satellite'`, `name: 'Спутник (backhaul)'`) без `SATELLITE_RASSVET` и без упоминаний «Рассвет».
+- **Топология спутникового резерва:** восстановлен сегмент `VSAT A/B -> SATELLITE -> Core`, при этом feed-линии `Edge A/B -> VSAT A/B` сохранены, а VSAT-антенны остаются на кровлях edge-узлов.
+- **Легенда:** в [`src/components/networks/ProposalLegend.tsx`](src/components/networks/ProposalLegend.tsx) возвращён узловой элемент `Satellite` (иконка `getProposalNodeLegendSvg('SATELLITE', ...)`), строка `Satellite backhaul` оставлена как line-style для `linkKind='satellite'`.
+- **Результат re-seed:** `node scripts/seed-digital-ruble-offline-minsk.mjs` → `Actions total: 43 (nodes: 17, links: 26)`; в предложенной сети снова присутствует спутник как отдельный узел.
+
+## Seed: спутниковый резерв — «на общих понятиях» (2026-04-24)
+
+- **Контекст:** пользователь запросил убрать `SATELLITE_RASSVET` как отдельный узел сценария — отдельный спутник над Минском в seed'е выглядел геопространственно нереалистично, а топология должна строиться «на общих понятиях».
+- **Что сделано в** [`scripts/seed-digital-ruble-offline-minsk.mjs`](scripts/seed-digital-ruble-offline-minsk.mjs):
+  - Удалён узел `sat-rassvet` (`SATELLITE_RASSVET`) вместе с тремя satellite-линками, которые через него проходили.
+  - Добавлены два резервных спутниковых аплинка **прямо от VSAT к Core** (`linkKind=satellite`, `type=CABLE_FIBER`), без промежуточного орбитального узла; дуга аплинка формируется `via: [{lat,lng}]` в «небесной» точке севернее Минска — это даёт визуально понятный небесный сегмент без фейкового «спутника над городом».
+  - VSAT-антенны перенесены на **кровли edge-узлов** (`vsat-a` рядом с `edge-a`, `vsat-b` рядом с `edge-b`) со смещением ~20 м, чтобы в легенде «VSAT antenna» корректно читалась как оборудование edge-площадки, а не как объект в центре города.
+  - Из `DESCRIPTION`/`name`/`stepLabel` убраны любые упоминания «Рассвет»; оставлены нейтральные термины «VSAT-антенна», «спутниковый аплинк», «спутниковый backhaul». В `metadata` добавлен флаг `isSatellite: link.kind === 'satellite'`.
+  - Итог после re-seed: `nodes: 16, links: 25` (было 17 / 26). Спутники на глобусе по-прежнему видны — они рендерятся независимо из слоя SATCAT.
+- **Runtime-стиль для `linkKind=satellite`** — [`src/app/networks/[id]/page.tsx`](src/app/networks/[id]/page.tsx):
+  - И в 3D (Three.js), и в 2D (Leaflet) ветках теперь читается `linkMetadataRecord(el)?.linkKind`. Если `linkKind === 'satellite'`, цвет переопределяется на `#8ab4f8` (совпадает с легендой), кабель становится дашнутым с паттерном, **отличным** от UNDERGROUND: 3D — `LineDashedMaterial { dashSize: 0.02, gapSize: 0.05 }`; 2D — `dashArray '2,6'` для основного кабеля и `'3,7'` для нижней «тени».
+  - До этого `linkKind` только писался в metadata seed'ом, но рендер игнорировал его; теперь строка «Satellite backhaul» в легенде наконец имеет геометрию-соответствие.
+- **Легенда** — [`src/components/networks/ProposalLegend.tsx`](src/components/networks/ProposalLegend.tsx): удалена узловая строка `Satellite link` (использовала иконку `SATELLITE_RASSVET`), поскольку в сценарии больше нет спутника-узла. Оставлены `VSAT antenna` и линия `Satellite backhaul` (стиль линии синхронизирован с runtime — `dashed #8ab4f8`).
+- **Prisma enum не трогали:** `SATELLITE_RASSVET` продолжает быть валидным типом для реальных спутников «Рассвет» из SATCAT на глобусе. Убран только локальный узел из сценария — миграция не нужна.
+- **Проверка:** `node scripts/seed-digital-ruble-offline-minsk.mjs` → exit 0, идемпотентный перенабор; `npx tsc --noEmit` — правки этого тикета чистые (три ошибки в `src/app/sandbox/page.tsx` — pre-existing, из commit `8b33426`, вне скоупа).
+
+## UI `/networks/[id]`: панель как на глобальной сети (2026-04-24)
+
+- **Сделано:** нижний ряд `Panel` «Режим» (3D/2D, +/−, число зума) + «Сеть» (счётчики узлов/кабелей) по образцу `EarthScene`; легенда — `ProposalCollapsibleLegend` (кнопка «Легенда ▼», сворачиваемое тело, на узких экранах полупрозрачный бэкдроп), тело вынесено в `ProposalLegendBody`. Поиск поселения перенесён в правую колонку сверху; из аккордеона деталей убраны кнопки «3D Глобус» / «2D Карта». Синхрон отображения зума: `setDisplayGlobeZoom` из trackball `onZoomApplied`, `mapZoomDisplay` по `zoomend` на Leaflet; шаги зума согласованы с глобальной картой (`GLOBE_ZOOM_STEP`, `MAP_ZOOM_MIN/MAX`).
+- **Позже:** из правой панели убран блок «Элементы:» со скролл-списком узлов/кабелей (дублировал сеть на глобусе); `proposalElements` по-прежнему только для 3D/2D и счётчиков.
+- **Центр глобуса:** при первом построении 3D для `proposal.id` центр и начальный zoom берутся из bbox всех точек сети (узлы + полилинии кабелей); после перехода 2D→3D по-прежнему используется центр карты (`lastGlobeFramedProposalIdRef`).
+- **UI swap (2D):** поменяны местами позиции 8-направленной навигации и кнопки легенды: `pv-nav-block` теперь внизу справа (`bottom: 12`), `ProposalCollapsibleLegend` в 2D поднимается на `bottom: calc(52px + env(safe-area-inset-bottom, 0px))`; в 3D легенда остаётся на прежнем месте.
+- **Термины режима:** во всех пользовательских местах заменены подписи `3D/2D` на `Глобус/Карта` (переключатели режимов + Home/About + metadata description в layout).
+- **Объёмный стиль карты:** для `networks/[id]` и глобальной `MapView` добавлен pseudo-3D вид узлов и кабелей: маркеры переведены на `buildProposalNodeDivIcon`, SVG-иконки усилены тенью/градиентом (включая `SATELLITE`), для кабелей добавлен нижний «теневой» проход полилинии для depth-эффекта.
+- **Наглядная топология seed-сценария:** `scripts/seed-digital-ruble-offline-minsk.mjs` перестроен с линейной цепочки на ветвящуюся mesh-сеть (7 mesh-узлов), добавлены VSAT-антенны (`VSAT_TERMINAL`) и спутниковый сегмент (`SATELLITE_RASSVET`) с отдельными linkKind=`satellite`; после запуска seed предложение пересобрано идемпотентно (`Actions total: 43`, nodes: 17, links: 26).
+- **Легенда и иконки:** в `proposalNodeIcons` добавлен SVG-тип `VSAT_TERMINAL`; в `ProposalLegendBody` добавлены элементы `VSAT antenna`, `Satellite link` и линия `Satellite backhaul` для визуального соответствия топологии.
+- **Файлы:** [`src/app/networks/[id]/page.tsx`](src/app/networks/[id]/page.tsx), [`src/components/networks/ProposalLegend.tsx`](src/components/networks/ProposalLegend.tsx).
+
 ## Референс: офлайн-платежи цифрового рубля в Минске (2026-04-23)
 
 - **Цель:** визуализировать сценарий офлайн-платежа цифрового рубля в Минске (Client A → Merchant POS → mesh → gateway → edge → Core → возврат подтверждения) как закреплённое (`pinned=true`) LOCAL-предложение на `/networks` и `/networks/[id]` (2D/3D).
@@ -1890,3 +2012,26 @@ What changed:
 
 Note:
 - Ошибки **Prisma `Can't reach database server at localhost:5432`** лечатся запуском Postgres/Docker (`docker start diploma-postgres` и т.д.), не конфигом Next.
+
+## 2026-05-07 — Предложения: WITHDRAWN, withdraw API, песочница по `proposalId`
+
+- Prisma: новый статус `WITHDRAWN`, миграция `20260507100000_proposal_status_withdrawn`.
+- API: `POST /api/proposals/[id]/withdraw` (подпись `diploma-z96a propose:withdraw:<id>`), голоса удаляются, запись остаётся.
+- UI `/networks`: убран блок «Элементы», у автора к `Просмотр сети / За / Против` добавлены «Редактировать» → `/sandbox?proposalId=` и «Удаление сети» (withdraw).
+- `/networks/[id]`: то же; полное удаление — только через личный кабинет (ссылка).
+- Песочница: `?proposalId=`, черновик в `sessionStorage` по ключу `sandbox-draft-v1:<id>`, сохранение через `sync-actions` (+ `submit-draft` для DRAFT/WITHDRAWN).
+- `submit-draft` допускает переход `WITHDRAWN` → `SUBMITTED`.
+- `/sandbox`: обёртка `Suspense` в `src/app/sandbox/layout.tsx` для `useSearchParams`.
+
+## 2026-05-07 — Watchpack EINVAL root-cause workflow (без маскировки)
+
+- Подтверждено, что в проектном коде нет пользовательских watcher-циклов по `C:\`; источник симптома связан с webpack/Watchpack initial scan на Windows.
+- Принят стабильный dev-workflow:
+  - `npm run dev` -> Turbopack по умолчанию;
+  - `npm run dev:webpack` -> диагностический fallback.
+- Добавлены отдельные скрипты clean-режимов:
+  - `npm run dev:clean` (turbo),
+  - `npm run dev:webpack:clean` (webpack).
+- Обновлена документация:
+  - `docs/windows-dev.md` (фиксированный workflow и правила диагностики),
+  - `docs/watchpack-root-cause-runbook.md` (пошаговый runbook: triage, smoke-checklist, residual risks).

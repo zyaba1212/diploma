@@ -7,7 +7,13 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
 import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { resetAuthSessionClient } from '@/lib/auth-session';
-import { buildUsernameMessage, normalizeUsername, validateUsernameFormat } from '@/lib/username';
+import {
+  buildUsernameMessage,
+  formatUsernameCooldownRemaining,
+  normalizeUsername,
+  validateUsernameFormat,
+} from '@/lib/username';
+import { emitProfileUpdated } from '@/lib/profile-events';
 import { Panel } from '@/components/ui/Panel';
 import { Button } from '@/components/ui/Button';
 
@@ -15,6 +21,7 @@ type ProfileJson = {
   pubkey: string;
   username: string | null;
   usernameSetAt: string | null;
+  usernameNextChangeAt: string | null;
   inDatabase?: boolean;
   isBanned?: boolean;
 };
@@ -38,6 +45,7 @@ const STATUS_BADGE: Record<string, { label: string; bg: string; color: string }>
   REJECTED: { label: 'Отклонено', bg: 'rgba(255,100,100,0.18)', color: '#ff9a9a' },
   APPLIED: { label: 'Применено', bg: 'rgba(200,160,255,0.15)', color: '#d4b8ff' },
   CANCELLED: { label: 'Отменено', bg: 'rgba(140,140,140,0.2)', color: '#c0c0c0' },
+  WITHDRAWN: { label: 'Снято с голосования', bg: 'rgba(201,162,39,0.2)', color: '#e6c24a' },
 };
 
 function proposalStatusAllowsAuthorDelete(status: string) {
@@ -70,6 +78,19 @@ export default function CabinetPage() {
   const [proposalsError, setProposalsError] = useState<string | null>(null);
   const [proposalDeleteBusyId, setProposalDeleteBusyId] = useState<string | null>(null);
   const [proposalDeleteErr, setProposalDeleteErr] = useState<string | null>(null);
+
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const nextChangeAtMs = profile?.usernameNextChangeAt
+    ? new Date(profile.usernameNextChangeAt).getTime()
+    : null;
+  const cooldownActive = nextChangeAtMs != null && nextChangeAtMs > nowMs;
+  const cooldownRemaining = cooldownActive ? nextChangeAtMs - nowMs : 0;
+
+  useEffect(() => {
+    if (!cooldownActive) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldownActive]);
 
   const loadProfile = useCallback(async () => {
     if (!pubkey) { setProfile(null); return; }
@@ -159,6 +180,7 @@ export default function CabinetPage() {
       if (!res.ok || !json.ok) { setStatus(json.error || `HTTP ${res.status}`); return; }
       setStatus('ник сохранён');
       setNick('');
+      emitProfileUpdated({ pubkey, username: u });
       await loadProfile();
     } catch (e: unknown) {
       setStatus(e instanceof Error ? e.message : 'ошибка');
@@ -220,6 +242,11 @@ export default function CabinetPage() {
                   <span style={{ color: 'var(--muted)' }}>username:</span>{' '}
                   {profile?.username ?? '—'}
                 </div>
+                {profile?.usernameSetAt && (
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                    последняя смена: {formatDate(profile.usernameSetAt)}
+                  </div>
+                )}
                 {profile?.isBanned && (
                   <p style={{ fontSize: 12, color: 'var(--danger, #ff6b6b)', marginTop: 8 }}>
                     Аккаунт заблокирован: действия от имени этого кошелька на сайте недоступны.
@@ -236,13 +263,32 @@ export default function CabinetPage() {
                   <div className="cabinet-username-form" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320 }}>
                     <label style={{ fontSize: 12, color: 'var(--muted)' }}>
                       Username (3-32: латиница, цифры, _)
-                      <input value={nick} onChange={(e) => setNick(e.target.value)} disabled={busy}
-                        style={{ display: 'block', width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.06)', color: 'var(--text)' }}
+                      <input value={nick} onChange={(e) => setNick(e.target.value)} disabled={busy || cooldownActive}
+                        style={{ display: 'block', width: '100%', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.06)', color: 'var(--text)', opacity: cooldownActive ? 0.6 : 1 }}
                       />
                     </label>
-                    <Button type="button" onClick={() => void setUsername()} disabled={busy}>
+                    <Button type="button" onClick={() => void setUsername()} disabled={busy || cooldownActive}>
                       Подписать и сохранить ник
                     </Button>
+                    {cooldownActive && nextChangeAtMs != null && (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: '#f0c864',
+                          background: 'rgba(240,200,100,0.08)',
+                          border: '1px solid rgba(240,200,100,0.25)',
+                          borderRadius: 8,
+                          padding: '8px 10px',
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        Смена никнейма доступна раз в 30 дней. До следующей смены осталось{' '}
+                        <b>{formatUsernameCooldownRemaining(cooldownRemaining)}</b>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                          Таймер сбросится {formatDate(new Date(nextChangeAtMs).toISOString())}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p style={{ fontSize: 12, color: 'var(--muted)' }}>
@@ -333,11 +379,13 @@ export default function CabinetPage() {
                     {showDelete ? (
                       <Button
                         type="button"
+                        variant="destructive"
                         onClick={() => void deleteProposal(p)}
+                        loading={proposalDeleteBusyId === p.id}
                         disabled={proposalDeleteBusyId === p.id}
                         style={{ flexShrink: 0, alignSelf: 'center' }}
                       >
-                        {proposalDeleteBusyId === p.id ? '…' : 'Удалить'}
+                        Удалить
                       </Button>
                     ) : proposalStatusAllowsAuthorDelete(p.status) ? (
                       <span style={{ fontSize: 11, color: 'var(--muted)', alignSelf: 'center', maxWidth: 100, flexShrink: 0 }}>

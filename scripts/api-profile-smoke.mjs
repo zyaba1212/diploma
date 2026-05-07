@@ -49,9 +49,10 @@ async function main() {
   assert(b1.inDatabase === true, 'expected inDatabase=true after auth verify');
   assert(b1.isBanned === false, 'expected isBanned=false for new user');
   assert(b1.usernameSetAt === null, 'expected usernameSetAt === null right after first login');
+  assert(b1.usernameNextChangeAt === null, 'expected usernameNextChangeAt === null right after first login');
   assert(isValidUsername(b1.username), `expected username to be valid; got ${JSON.stringify(b1.username)}`);
 
-  // 2) Username override while usernameSetAt === null.
+  // 2) Username override while usernameSetAt === null (first fixation). Must succeed.
   const username1 = `cab_${Date.now().toString().slice(-10)}`;
   assert(isValidUsername(username1), 'username1 format invalid');
 
@@ -72,15 +73,24 @@ async function main() {
   const b2 = await r2.json();
   assert(r2.status === 200, `POST /api/profile/username status ${r2.status}; body=${JSON.stringify(b2)}`);
   assert(b2.ok === true, 'expected ok=true on username override');
+  assert(typeof b2.usernameSetAt === 'string', 'expected usernameSetAt ISO string in response');
+  assert(
+    typeof b2.usernameNextChangeAt === 'string',
+    'expected usernameNextChangeAt ISO string in response (cooldown now active)',
+  );
 
   const r3 = await fetch(`${BASE_URL}/api/profile?pubkey=${pubkey}`);
   const b3 = await r3.json();
   assert(r3.status === 200, `GET /api/profile after set status ${r3.status}; body=${JSON.stringify(b3)}`);
   assert(b3.inDatabase === true, 'expected inDatabase=true after username set');
   assert(typeof b3.usernameSetAt === 'string' && b3.usernameSetAt.length > 0, 'expected usernameSetAt ISO string');
+  assert(
+    typeof b3.usernameNextChangeAt === 'string' && b3.usernameNextChangeAt.length > 0,
+    'expected usernameNextChangeAt ISO string (cooldown active)',
+  );
   assert(b3.username === username1, 'username mismatch after override');
 
-  // 3) Second override attempt should be allowed.
+  // 3) Immediate second override attempt with a different username — must be rejected by cooldown (429).
   const username2 = `cab_${(Date.now() + 1).toString().slice(-10)}`;
   assert(isValidUsername(username2), 'username2 format invalid');
 
@@ -99,14 +109,35 @@ async function main() {
     }),
   });
   const b4 = await r4.json().catch(() => null);
-  assert(r4.status === 200, `expected 200 on changing username after set, got ${r4.status}; body=${JSON.stringify(b4)}`);
-  assert(b4?.ok === true, `expected ok=true on second username change; body=${JSON.stringify(b4)}`);
+  assert(r4.status === 429, `expected 429 cooldown on second change within a month, got ${r4.status}; body=${JSON.stringify(b4)}`);
+  assert(b4?.ok === false, 'expected ok=false on cooldown');
+  assert(b4?.code === 'username_cooldown', `expected code=username_cooldown, got ${JSON.stringify(b4?.code)}`);
+  assert(typeof b4?.msRemaining === 'number' && b4.msRemaining > 0, 'expected positive msRemaining');
+  assert(typeof b4?.nextChangeAt === 'string' && b4.nextChangeAt.length > 0, 'expected nextChangeAt ISO string');
 
   const r5 = await fetch(`${BASE_URL}/api/profile?pubkey=${pubkey}`);
   const b5 = await r5.json();
-  assert(r5.status === 200, `GET /api/profile after 2nd set status ${r5.status}; body=${JSON.stringify(b5)}`);
-  assert(b5.username === username2, 'username mismatch after 2nd override');
-  assert(typeof b5.usernameSetAt === 'string' && b5.usernameSetAt.length > 0, 'expected usernameSetAt non-null after 2nd override');
+  assert(r5.status === 200, `GET /api/profile after rejected change status ${r5.status}; body=${JSON.stringify(b5)}`);
+  assert(b5.username === username1, 'username must remain unchanged after cooldown rejection');
+
+  // 4) Idempotent case: posting the same username again (no change) — must succeed without resetting timer.
+  const usernameMessage3 = buildUsernameMessage(pubkey, username1);
+  const usernameSigBytes3 = nacl.sign.detached(new TextEncoder().encode(usernameMessage3), kp.secretKey);
+  const usernameSignature3 = bs58.encode(usernameSigBytes3);
+
+  const r6 = await fetch(`${BASE_URL}/api/profile/username`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      publicKey: pubkey,
+      message: usernameMessage3,
+      signature: usernameSignature3,
+      username: username1,
+    }),
+  });
+  const b6 = await r6.json();
+  assert(r6.status === 200, `idempotent same-username status ${r6.status}; body=${JSON.stringify(b6)}`);
+  assert(b6.ok === true && b6.idempotent === true, `expected idempotent=true; body=${JSON.stringify(b6)}`);
 
   console.log('api-profile-smoke: OK');
 }
@@ -115,4 +146,3 @@ main().catch((err) => {
   console.error('api-profile-smoke failed:', err);
   process.exit(1);
 });
-

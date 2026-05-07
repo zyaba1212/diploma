@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1920" />
+    <title>Рисунок 2.1 — Главная (макет)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./thesis-mockups.css" />
+  </head>
+  <body>
+    <div class="tm-viewport">
+      <header class="tm-header" aria-label="Шапка сайта">
+        <div class="tm-brand">
+          <span class="tm-brand-mark">VSAT</span>
+          <span class="tm-brand-name">diploma-z96a</span>
+        </div>
+        <nav class="tm-nav" aria-label="Основное меню">
+          <a href="#" class="tm-active">Главная</a>
+          <a href="#">О нас</a>
+          <a href="#">Глобальная сеть</a>
+          <a href="#">Песочница</a>
+          <a href="#">Предложения</a>
+          <a href="#">Новости</a>
+        </nav>
+        <div class="tm-header-actions">
+          <button type="button" class="tm-btn tm-btn-primary">Подключить</button>
+        </div>
+      </header>
+
+      <main class="tm-main" style="padding-top: 18px">
+        <div style="max-width: 1040px; margin: 0 auto">
+          <p class="tm-kicker">Дипломный проект</p>
+          <h1 class="tm-h1">
+            <span class="tm-accent">Архитектура систем транзакций</span> в условиях частичного отсутствия интернета
+          </h1>
+          <p class="tm-lead">
+            Исследование и демонстрация устойчивой сетевой архитектуры для финансовых операций при сбоях инфраструктуры
+            — от mesh-сетей до спутниковых каналов.
+          </p>
+
+          <div class="tm-grid-2" style="margin-top: 28px">
+            <section class="tm-panel">
+              <h2 class="tm-section-label">Проблема</h2>
+              <p style="margin: 0; font-size: 15px; line-height: 1.65">
+                В 2024 году ураган в Мозыре (Беларусь) привёл к <strong>трёхдневной потере связи</strong>. К 2026 году
+                вводится цифровой рубль — гражданам нужен <strong>надёжный доступ к транзакциям</strong> даже при отказах
+                сети.
+              </p>
+            </section>
+            <section class="tm-panel">
+              <h2 class="tm-section-label">Решение</h2>
+              <p style="margin: 0; font-size: 15px; line-height: 1.65">
+                Проект показывает отказоустойчивую архитектуру: <strong>mesh-сети</strong>, ретрансляция через
+                <strong>2G/SMS</strong>, <strong>очереди офлайн-транзакций</strong> и резерв через <strong>VSAT</strong>
+                — чтобы платежи не зависали при обрыве интернета.
+              </p>
+            </section>
+          </div>
+
+          <h2 class="tm-section-label" style="margin-top: 28px; margin-bottom: 14px">Ключевые разделы</h2>
+          <div class="tm-grid-4">
+            <a href="#" class="tm-panel tm-card-link">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
+                <span class="tm-card-title">Глобальная сеть</span>
+                <span class="tm-card-meta">Открыть →</span>
+              </div>
+              <div class="tm-card-desc">Интерактивный глобус и карта: визуализация мировой инфраструктуры связи.</div>
+            </a>
+            <a href="#" class="tm-panel tm-card-link">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
+                <span class="tm-card-title">Песочница</span>
+                <span class="tm-card-meta">Открыть →</span>
+              </div>
+              <div class="tm-card-desc">Соберите и протестируйте архитектурные предложения для сети.</div>
+            </a>
+            <a href="#" class="tm-panel tm-card-link">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
+                <span class="tm-card-title">Предложения</span>
+                <span class="tm-card-meta">Открыть →</span>
+              </div>
+              <div class="tm-card-desc">On-chain голосование за изменения сети через блокчейн Solana.</div>
+            </a>
+            <a href="#" class="tm-panel tm-card-link">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
+                <span class="tm-card-title">Новости</span>
+                <span class="tm-card-meta">Открыть →</span>
+              </div>
+              <div class="tm-card-desc">Лента новостей о технологиях и телекоммуникациях.</div>
+            </a>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

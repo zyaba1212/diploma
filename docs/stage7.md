@@ -254,6 +254,10 @@ Response:
 Примечание:
 - На v1 можно не отдавать `diff` наружу (diff нужен только backend для rollback).
 
+## ProposalRevision (песочница; не путать с HistoryEntry)
+
+Отдельно от `HistoryEntry` (журнал **после apply** к live-сети): **`ProposalRevision`** хранит снимки графа и сообщения коммитов при сохранении из песочницы (`GET/POST /api/proposals/:id/revisions`, `POST .../fork`). Это история эволюции **предложения до применения**, не rollback.
+
 ## Ключевая консистентность: contentHash и chain submission
 
 На Stage 7 v1 предлагается:

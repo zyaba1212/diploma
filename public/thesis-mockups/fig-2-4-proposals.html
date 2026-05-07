@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1920" />
+    <title>Рисунок 2.4 — Предложения (макет)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./thesis-mockups.css" />
+    <style>
+      .tm-split {
+        display: grid;
+        grid-template-columns: 420px 1fr;
+        gap: 20px;
+        height: 100%;
+        align-items: stretch;
+      }
+      .tm-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: hidden;
+      }
+      .tm-prop-mini {
+        padding: 12px 14px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+      }
+      .tm-prop-mini.tm-sel {
+        border-color: var(--accent);
+        background: var(--table-row-hover);
+      }
+      .tm-prop-mini h3 {
+        margin: 0 0 6px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .tm-prop-mini p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .tm-detail h2 {
+        margin: 0 0 10px;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .tm-detail-meta {
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+      .tm-vote-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+      }
+      .tm-vote {
+        padding: 10px 18px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 13px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font-family: inherit;
+      }
+      .tm-vote-for {
+        border-color: var(--success);
+        color: var(--success);
+      }
+      .tm-vote-against {
+        border-color: var(--danger);
+        color: var(--danger);
+      }
+      .tm-counts {
+        margin-top: 12px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tm-viewport">
+      <header class="tm-header">
+        <div class="tm-brand">
+          <span class="tm-brand-mark">VSAT</span>
+          <span class="tm-brand-name">diploma-z96a</span>
+        </div>
+        <nav class="tm-nav">
+          <a href="#">Главная</a>
+          <a href="#">О нас</a>
+          <a href="#">Глобальная сеть</a>
+          <a href="#">Песочница</a>
+          <a href="#" class="tm-active">Предложения</a>
+          <a href="#">Новости</a>
+        </nav>
+        <div class="tm-header-actions">
+          <button type="button" class="tm-btn tm-btn-primary">Подключить</button>
+        </div>
+      </header>
+
+      <main class="tm-main" style="padding: 18px 28px 22px">
+        <h1 style="margin: 0 0 16px; font-size: 26px; font-weight: 700">ПРЕДЛОЖЕННАЯ СЕТЬ</h1>
+        <div class="tm-split">
+          <div class="tm-list" aria-label="Список предложений">
+            <div class="tm-prop-mini">
+              <h3>Резерв VSAT для района «Север»</h3>
+              <p>Автор: operator_01 · 12.04.2026</p>
+              <p style="margin-top: 8px"><span class="tm-status tm-status-review">На рассмотрении</span></p>
+            </div>
+            <div class="tm-prop-mini tm-sel">
+              <h3>Mesh-ретрансляторы вдоль магистрали</h3>
+              <p>Автор: mesh_lab · 08.04.2026</p>
+              <p style="margin-top: 8px"><span class="tm-status tm-status-review">На рассмотрении</span></p>
+            </div>
+            <div class="tm-prop-mini">
+              <h3>Обновление спутникового шлюза</h3>
+              <p>Автор: sat_ops · 01.04.2026</p>
+              <p style="margin-top: 8px"><span class="tm-status tm-status-ok">Принято</span></p>
+            </div>
+            <div class="tm-prop-mini">
+              <h3>Удаление устаревшего медного сегмента</h3>
+              <p>Автор: audit_team · 22.03.2026</p>
+              <p style="margin-top: 8px"><span class="tm-status tm-status-bad">Отклонено</span></p>
+            </div>
+          </div>
+
+          <article class="tm-panel tm-detail" aria-label="Детали предложения">
+            <h2>Mesh-ретрансляторы вдоль магистрали</h2>
+            <div class="tm-detail-meta">
+              Автор: <strong style="color: var(--text)">mesh_lab</strong> · создано 08.04.2026 · голосование до 15.04.2026
+            </div>
+            <p style="margin: 0; font-size: 15px; line-height: 1.65; max-width: 720px">
+              Добавить три mesh-узла для локального резервирования при обрыве наземного канала. Сегмент относится к
+              зоне повышенного риска отключений; изменения согласуются on-chain.
+            </p>
+            <div class="tm-vote-row">
+              <button type="button" class="tm-vote tm-vote-for">ЗА</button>
+              <button type="button" class="tm-vote tm-vote-against">ПРОТИВ</button>
+            </div>
+            <div class="tm-counts">
+              За: <strong style="color: var(--success)">42</strong> · Против:
+              <strong style="color: var(--danger)">7</strong> · Всего голосов: <strong>49</strong>
+            </div>
+          </article>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

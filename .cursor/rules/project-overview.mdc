@@ -18,7 +18,7 @@ alwaysApply: true
 - **API-контракты**: `GET /api/network`, `POST /api/auth(/verify)`, `GET /api/tile`, `GET /api/geocode/search|reverse`, `GET /api/profile`, `POST /api/profile/username`, эндпоинты `/api/proposals/:id/*`.
 - **Phantom auth**: подпись + `tweetnacl` + `bs58` + upsert `User` по `pubkey`.
 - **Wallet autoconnect**: 30 мин idle → сброс (`src/lib/wallet-autoconnect-policy.ts`).
-- **Username**: `usernameSetAt == null` ⇒ можно переопределить; `!= null` ⇒ 403.
+- **Username**: никнейм можно менять всегда, но не чаще одного раза в 30 дней. Первичная фиксация (`usernameSetAt == null`) допускается всегда. После фиксации повторная смена до истечения 30 дней ⇒ 429 (`code: 'username_cooldown'`, `msRemaining`, `nextChangeAt`). Отправка того же ника — идемпотентный 200 без сброса таймера. Константа cooldown и хелперы — `src/lib/username.ts` (`USERNAME_CHANGE_COOLDOWN_MS`, `computeUsernameNextChangeAt`, `formatUsernameCooldownRemaining`).
 - **3D↔2D**: ручное переключение, без auto-zoom-переходов; центр через `src/lib/three/globeMapSync.ts`.
 - **Пути страниц App Router** не переименовывать.
 

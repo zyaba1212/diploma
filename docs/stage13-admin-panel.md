@@ -78,9 +78,8 @@
 | POST | `/api/admin/sessions/revoke-all` | staff |
 | GET | `/api/admin/audit-log` | staff |
 | GET | `/api/admin/stats` | staff (в т.ч. `recentAudit` для всех staff-ролей) |
-| GET | `/api/admin/news` | ADMIN |
-| POST | `/api/admin/news/sync` | ADMIN |
-| DELETE | `/api/admin/news/:id` | ADMIN |
+
+Эндпоинты **`/api/admin/news*`** в текущем дереве исходников **не реализованы**. Наполнение `NewsCache`: публичный `GET /api/news`, cron [`/api/cron/news-sync`](../src/app/api/cron/news-sync/route.ts) и CLI `npm run scripts:news-backfill` (см. [`operations.md`](operations.md)).
 
 ## Навигация
 
@@ -92,7 +91,7 @@
 - `src/lib/admin-guard.ts` — `requireStaff` / `requireAdmin` / `requireModerator`.
 - `src/lib/audit.ts` — `recordAuditEvent`, константы `AuditAction`.
 - `src/lib/adminFetch.ts` — общие fetch-хелперы для клиентских страниц админки.
-- `src/lib/news.ts` — общая логика RSS → `NewsCache` (используется и публичным `GET /api/news`, и `POST /api/admin/news/sync`).
+- `src/lib/news.ts` — общая логика RSS → `NewsCache` (используется публичным `GET /api/news`, `GET/POST /api/cron/news-sync`, CLI `npm run scripts:news-backfill`).
 
 ## Smoke
 

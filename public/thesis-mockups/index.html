@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Макеты главы 2.2</title>
+    <link rel="stylesheet" href="./thesis-mockups.css" />
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #0d0f11;
+        color: var(--text);
+        font-family: Inter, system-ui, sans-serif;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 8px;
+      }
+      p {
+        color: var(--muted);
+        max-width: 720px;
+        line-height: 1.55;
+        margin: 0 0 18px;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 10px;
+        max-width: 520px;
+      }
+      a {
+        display: block;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--panel);
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      a:hover {
+        background: var(--table-row-hover);
+      }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <h1>Макеты интерфейса (глава 2.2)</h1>
+    <p>
+      Цвета и стиль совпадают с <code>src/theme/colors.ts</code> и <code>src/app/globals.css</code> (палитра «Пульт VSAT»). Каждый файл — холст 1920×1080. PNG можно сгенерировать командой
+      <code style="color: var(--text)">npm run thesis:mockups-png</code> (нужны <code style="color: var(--text)">playwright</code> и один раз
+      <code style="color: var(--text)">npx playwright install chromium</code>) — файлы появятся рядом, с именами <code style="color: var(--text)">fig-2-*-*.png</code>.
+      Либо откройте HTML в браузере и сделайте скриншот вручную.
+    </p>
+    <ul>
+      <li><a href="./fig-2-1-main-page.html">Рисунок 2.1 — Главная</a></li>
+      <li><a href="./fig-2-2-global-network.html">Рисунок 2.2 — Глобальная сеть</a></li>
+      <li><a href="./fig-2-3-sandbox.html">Рисунок 2.3 — Песочница</a></li>
+      <li><a href="./fig-2-4-proposals.html">Рисунок 2.4 — Предложения</a></li>
+      <li><a href="./fig-2-5-news.html">Рисунок 2.5 — Новости</a></li>
+      <li><a href="./fig-2-6-admin-dashboard.html">Рисунок 2.6 — Админ-панель</a></li>
+    </ul>
+  </body>
+</html>

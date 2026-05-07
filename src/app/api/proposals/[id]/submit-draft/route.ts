@@ -39,7 +39,9 @@ export async function POST(req: Request, { params }: Params) {
 
   if (!proposal) return NextResponse.json({ error: 'not found' }, { status: 404 });
   if (proposal.authorPubkey !== authorPubkey) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-  if (proposal.status !== 'DRAFT') return NextResponse.json({ error: 'proposal must be DRAFT' }, { status: 400 });
+  if (proposal.status !== 'DRAFT' && proposal.status !== 'WITHDRAWN') {
+    return NextResponse.json({ error: 'proposal must be DRAFT or WITHDRAWN' }, { status: 400 });
+  }
   if (proposal.actions.length === 0) return NextResponse.json({ error: 'proposal must have at least one action' }, { status: 400 });
 
   const contentHash = computeProposalContentHashHexFromDbActions({

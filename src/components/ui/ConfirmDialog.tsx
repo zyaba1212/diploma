@@ -30,14 +30,15 @@ export function ConfirmDialog({
     <Modal
       open={open}
       onClose={onClose}
+      closeDisabled={Boolean(busy)}
       title={title}
       footer={
         <>
           <Button type="button" onClick={onClose} disabled={busy}>
             {cancelLabel}
           </Button>
-          <Button type="button" variant={danger ? 'danger' : 'default'} onClick={() => void onConfirm()} disabled={busy}>
-            {busy ? '…' : confirmLabel}
+          <Button type="button" variant={danger ? 'destructive' : 'outline'} loading={busy} onClick={() => void onConfirm()} disabled={busy}>
+            {confirmLabel}
           </Button>
         </>
       }

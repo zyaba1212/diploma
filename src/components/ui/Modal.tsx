@@ -1,6 +1,8 @@
 'use client';
 
 import { CSSProperties, ReactNode, useEffect } from 'react';
+import { useRef } from 'react';
+import { Button } from '@/components/ui/Button';
 
 export function Modal({
   open,
@@ -9,6 +11,7 @@ export function Modal({
   children,
   footer,
   width = 520,
+  closeDisabled = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -16,14 +19,23 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   width?: number;
+  closeDisabled?: boolean;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
+    lastFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     function handler(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !closeDisabled) onClose();
     }
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    queueMicrotask(() => panelRef.current?.focus());
+    return () => {
+      window.removeEventListener('keydown', handler);
+      lastFocusedRef.current?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -51,26 +63,14 @@ export function Modal({
   };
 
   return (
-    <div style={backdrop} onClick={onClose} role="dialog" aria-modal="true">
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <div style={backdrop} onClick={closeDisabled ? undefined : onClose} role="dialog" aria-modal="true">
+      <div ref={panelRef} style={panel} onClick={(e) => e.stopPropagation()} tabIndex={-1}>
         {title ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h3>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                appearance: 'none',
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--muted)',
-                fontSize: 20,
-                cursor: 'pointer',
-              }}
-              aria-label="Закрыть"
-            >
+            <Button type="button" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Закрыть" disabled={closeDisabled}>
               ×
-            </button>
+            </Button>
           </div>
         ) : null}
         <div>{children}</div>

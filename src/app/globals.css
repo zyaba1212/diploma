@@ -1,3 +1,6 @@
+@import 'leaflet/dist/leaflet.css';
+@import '@solana/wallet-adapter-react-ui/styles.css';
+
 :root {
   color-scheme: dark;
   /* Палитра «Пульт VSAT» — синхронизировано с src/theme/colors.ts */
@@ -12,11 +15,8 @@
   --danger: #b3413a;
   --table-row-hover: #2e353a;
   --map-canvas: #111315;
+  --btn-focus-ring: 0 0 0 2px rgba(244, 182, 66, 0.45);
 }
-
-/* Leaflet base styles (required for tiles/controls). */
-@import 'leaflet/dist/leaflet.css';
-@import '@solana/wallet-adapter-react-ui/styles.css';
 
 html,
 body {
@@ -36,6 +36,12 @@ body {
 
 a {
   color: var(--accent);
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: none;
+  box-shadow: var(--btn-focus-ring);
 }
 
 .data-table-wrap tbody tr:hover td {
@@ -74,7 +80,8 @@ a {
 
 @media (max-width: 767px) {
   button,
-  a {
+  [role='button'],
+  .touch-target {
     min-height: 44px;
   }
   input,
@@ -92,4 +99,26 @@ body {
 
 .leaflet-container {
   touch-action: none;
+}
+
+/**
+ * Map tooltip readability on light OSM tiles.
+ * Используется в MapView/networks/[id]: className: 'map-tooltip'.
+ */
+.leaflet-tooltip.map-tooltip {
+  background: rgba(10, 20, 45, 0.94);
+  color: #eaf2ff;
+  border: 1px solid rgba(120, 160, 255, 0.35);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(8, 15, 28, 0.45);
+}
+.leaflet-tooltip.map-tooltip::before {
+  border-top-color: rgba(10, 20, 45, 0.94);
+  border-bottom-color: rgba(10, 20, 45, 0.94);
+}
+.leaflet-tooltip.map-tooltip a {
+  color: #aac4ff;
 }

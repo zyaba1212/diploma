@@ -37,6 +37,8 @@ const ACTION_LABEL_RU: Record<string, string> = {
   [AuditAction.ProposalForceRollback]: 'Откат изменений по предложению',
   [AuditAction.ProposalAdminHardDelete]: 'Предложение удалено из базы',
   [AuditAction.ProposalModerationDecision]: 'Решение по модерации предложения',
+  [AuditAction.ProposalStaffSetStatus]: 'Статус предложения изменён (staff)',
+  [AuditAction.ProposalResetFromCancelled]: 'Предложение возвращено из отмены (staff)',
   'news.sync': 'Обновлена лента новостей (RSS → кэш)',
 };
 
@@ -178,6 +180,24 @@ export function formatAuditMetaHuman(action: string, meta: unknown): string {
     if (toStatus) parts.push(`новый статус: ${toStatus}`);
     if (comment) parts.push(`комментарий: ${comment}`);
     if (rejectionReason) parts.push(`причина отказа: ${rejectionReason}`);
+    return parts.length ? parts.join('. ') + '.' : '—';
+  }
+
+  if (action === AuditAction.ProposalStaffSetStatus) {
+    const parts: string[] = [];
+    if (fromStatus) parts.push(`было: ${fromStatus}`);
+    if (toStatus) parts.push(`стало: ${toStatus}`);
+    const staffNote = str(meta.note);
+    if (staffNote) parts.push(`комментарий: ${staffNote}`);
+    return parts.length ? parts.join('. ') + '.' : '—';
+  }
+
+  if (action === AuditAction.ProposalResetFromCancelled) {
+    const parts: string[] = [];
+    if (fromStatus) parts.push(`было: ${fromStatus}`);
+    if (toStatus) parts.push(`стало: ${toStatus}`);
+    const n = str(meta.note);
+    if (n) parts.push(`комментарий: ${n}`);
     return parts.length ? parts.join('. ') + '.' : '—';
   }
 

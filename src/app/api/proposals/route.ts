@@ -20,7 +20,15 @@ function parseScope(value: string | null): Scope | null {
 
 function parseStatus(value: string | null): ProposalStatus | null {
   if (!value) return null;
-  if (value === 'DRAFT' || value === 'SUBMITTED' || value === 'ACCEPTED' || value === 'REJECTED' || value === 'APPLIED') {
+  if (
+    value === 'DRAFT' ||
+    value === 'SUBMITTED' ||
+    value === 'ACCEPTED' ||
+    value === 'REJECTED' ||
+    value === 'APPLIED' ||
+    value === 'CANCELLED' ||
+    value === 'WITHDRAWN'
+  ) {
     return value;
   }
   return null;
@@ -150,6 +158,7 @@ export async function GET(req: Request) {
         scope: true,
         authorPubkey: true,
         status: true,
+        forkedFromProposalId: true,
         pinned: true,
         title: true,
         description: true,
@@ -158,6 +167,10 @@ export async function GET(req: Request) {
         submittedAt: true,
         decidedAt: true,
         votingEndsAt: true,
+        onChainTxSignature: true,
+        _count: {
+          select: { votes: true, revisions: true },
+        },
       },
     });
 

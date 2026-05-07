@@ -2,23 +2,26 @@
 // Страница /networks — UI Next.js App Router.
 
 
-import { useCallback, useEffect, useState } from 'react';
+import { SyntheticEvent, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { Panel } from '@/components/ui/Panel';
-import { Button } from '@/components/ui/Button';
+import { Button, ButtonLink } from '@/components/ui/Button';
+import { usernameIsPinnedNetworkCurator } from '@/lib/pinnedNetworkCurator';
 type ProposalDTO = {
   id: string;
   scope: string;
   authorPubkey: string;
   status: string;
+  forkedFromProposalId?: string | null;
   title: string | null;
   description: string | null;
   pinned?: boolean;
   createdAt: string;
   votingEndsAt?: string | null;
+  _count?: { votes?: number; revisions?: number };
 };
 
 type VoteTally = {
@@ -26,11 +29,6 @@ type VoteTally = {
   against: number;
   total: number;
   userVote: string | null;
-};
-
-type ActionDTO = {
-  actionType: string;
-  elementPayload: Record<string, unknown>;
 };
 
 export default function NetworksPage() {
@@ -43,9 +41,31 @@ export default function NetworksPage() {
   const [tallies, setTallies] = useState<Record<string, VoteTally>>({});
   const [usernames, setUsernames] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedActions, setSelectedActions] = useState<ActionDTO[]>([]);
   const [voting, setVoting] = useState(false);
   const [voteError, setVoteError] = useState<string | null>(null);
+  const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [myUsername, setMyUsername] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pubkey) {
+      setMyUsername(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/profile?pubkey=${encodeURIComponent(pubkey)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { username?: string | null } | null) => {
+        if (!cancelled && j && typeof j.username === 'string') setMyUsername(j.username);
+        else if (!cancelled) setMyUsername(null);
+      })
+      .catch(() => {
+        if (!cancelled) setMyUsername(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pubkey]);
 
   useEffect(() => {
     setLoading(true);
@@ -121,27 +141,68 @@ export default function NetworksPage() {
     [publicKey, signMessage, pubkey, sessionVerified],
   );
 
-  const loadActions = useCallback(async (proposalId: string) => {
-    try {
-      const r = await fetch(`/api/proposals/${proposalId}`);
-      if (!r.ok) return;
-      const data = await r.json();
-      setSelectedActions(data.actions ?? []);
-    } catch {}
-  }, []);
-
   const handleSelect = useCallback(
     (id: string) => {
       if (selectedId === id) {
         setSelectedId(null);
-        setSelectedActions([]);
       } else {
         setSelectedId(id);
-        loadActions(id);
       }
     },
-    [selectedId, loadActions],
+    [selectedId],
   );
+
+  const handleWithdraw = useCallback(
+    async (proposalId: string) => {
+      if (!publicKey || !signMessage || !sessionVerified) return;
+      if (
+        !window.confirm(
+          'Снять предложение с голосования? Оно исчезнет из списка активных предложений. Безвозвратное удаление из базы — только в личном кабинете.',
+        )
+      ) {
+        return;
+      }
+      setWithdrawingId(proposalId);
+      setWithdrawError(null);
+      try {
+        const message = `diploma-z96a propose:withdraw:${proposalId}`;
+        const sigBytes = await signMessage(new TextEncoder().encode(message));
+        const res = await fetch(`/api/proposals/${encodeURIComponent(proposalId)}/withdraw`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ authorPubkey: pubkey, signature: bs58.encode(sigBytes) }),
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as {
+            error?: string;
+            code?: string;
+          };
+          let msg = data.error || `HTTP ${res.status}`;
+          if (data.code === 'SCHEMA_ENUM_MISSING') {
+            msg =
+              'На сервере не применены миграции БД (статус WITHDRAWN). Обратитесь к администратору или выполните prisma migrate deploy.';
+          }
+          throw new Error(msg);
+        }
+        setProposals((prev) => prev.filter((p) => p.id !== proposalId));
+        setSelectedId(null);
+        setTallies((prev) => {
+          const next = { ...prev };
+          delete next[proposalId];
+          return next;
+        });
+      } catch (e: unknown) {
+        setWithdrawError(e instanceof Error ? e.message : 'Ошибка снятия с голосования');
+      } finally {
+        setWithdrawingId(null);
+      }
+    },
+    [publicKey, signMessage, pubkey, sessionVerified],
+  );
+
+  const stopCardSelectionFromAction = useCallback((event: SyntheticEvent) => {
+    event.stopPropagation();
+  }, []);
 
   const timeRemaining = (endsAt: string | null | undefined) => {
     if (!endsAt) return null;
@@ -159,23 +220,32 @@ export default function NetworksPage() {
     >
       <div className="networks-page-inner" style={{ maxWidth: 900, margin: '0 auto' }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text)', marginBottom: 24 }}>
-          Предложенные сети
+          ПРЕДЛОЖЕННАЯ СЕТЬ
         </h1>
 
         {loading && <p style={{ color: 'var(--muted)' }}>Загрузка…</p>}
         {error && <p style={{ color: 'var(--danger, #ff6b6b)' }}>Ошибка: {error}</p>}
         {voteError && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13 }}>Голосование: {voteError}</p>}
+        {withdrawError && <p style={{ color: 'var(--danger, #ff6b6b)', fontSize: 13 }}>Снятие с голосования: {withdrawError}</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {proposals.map((p) => {
             const tally = tallies[p.id];
             const isSelected = selectedId === p.id;
             const remaining = timeRemaining(p.votingEndsAt);
+            const isAuthor = Boolean(pubkey && p.authorPubkey === pubkey);
+            const viewerIsPinnedCurator = usernameIsPinnedNetworkCurator(myUsername);
+            const canOpenSandboxEditor =
+              Boolean(publicKey && sessionVerified) &&
+              (p.status === 'SUBMITTED' || p.status === 'ACCEPTED' || p.status === 'APPLIED') &&
+              (isAuthor || (p.pinned && viewerIsPinnedCurator));
 
             return (
               <div
                 key={p.id}
                 className="networks-proposal-card"
+                role="button"
+                tabIndex={0}
                 style={{
                   background: isSelected ? 'rgba(120,160,255,0.08)' : 'rgba(255,255,255,0.03)',
                   border: `1px solid ${isSelected ? 'rgba(120,160,255,0.3)' : 'rgba(232,236,255,0.10)'}`,
@@ -185,6 +255,12 @@ export default function NetworksPage() {
                   transition: 'all 0.2s',
                 }}
                 onClick={() => handleSelect(p.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleSelect(p.id);
+                  }
+                }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
@@ -216,17 +292,19 @@ export default function NetworksPage() {
                         {p.status}
                       </span>
                     </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      <span>Ревизий: {p._count?.revisions ?? 0}</span>
+                      {p.forkedFromProposalId ? (
+                        <span>
+                          fork от: <code style={{ fontSize: 10 }}>{p.forkedFromProposalId.slice(0, 8)}…</code>
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   {remaining && (
                     <span style={{ fontSize: 11, color: '#f6c177', whiteSpace: 'nowrap' }}>{remaining}</span>
                   )}
                 </div>
-
-                {p.description && (
-                  <p style={{ fontSize: 13, color: 'rgba(200,220,255,0.7)', margin: '10px 0 0', lineHeight: 1.5 }}>
-                    {p.description.length > 200 ? p.description.slice(0, 200) + '…' : p.description}
-                  </p>
-                )}
 
                 {/* Vote bar */}
                 {tally && (
@@ -257,12 +335,18 @@ export default function NetworksPage() {
                   <div
                     className="networks-vote-actions"
                     style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={stopCardSelectionFromAction}
+                    onPointerDown={stopCardSelectionFromAction}
+                    onTouchStart={stopCardSelectionFromAction}
+                    onMouseDown={stopCardSelectionFromAction}
                   >
                     <>
-                      <Link href={`/networks/${p.id}`} style={{ textDecoration: 'none' }}>
-                        <Button>Просмотр сети</Button>
-                      </Link>
+                      <ButtonLink href={`/networks/${p.id}`}>Просмотр сети</ButtonLink>
+                      {canOpenSandboxEditor ? (
+                        <ButtonLink href={`/sandbox?proposalId=${encodeURIComponent(p.id)}`}>
+                          Редактировать
+                        </ButtonLink>
+                      ) : null}
                       {p.status === 'SUBMITTED' && publicKey && (
                         <>
                           <Button
@@ -279,36 +363,17 @@ export default function NetworksPage() {
                           </Button>
                         </>
                       )}
-                    </>
-                  </div>
-                )}
-
-                {/* Expanded: show actions */}
-                {isSelected && selectedActions.length > 0 && (
-                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)' }}>
-                    <strong>Элементы ({selectedActions.length}):</strong>
-                    <div className="networks-card-chips" style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {selectedActions.slice(0, 10).map((a, i) => {
-                        const payload = a.elementPayload as Record<string, unknown>;
-                        return (
-                          <span
-                            key={i}
-                            style={{
-                              padding: '3px 8px',
-                              borderRadius: 6,
-                              background: 'rgba(120,160,255,0.12)',
-                              border: '1px solid rgba(120,160,255,0.2)',
-                              fontSize: 11,
-                            }}
-                          >
-                            {a.actionType} {String(payload.type || payload.name || '')}
-                          </span>
-                        );
-                      })}
-                      {selectedActions.length > 10 && (
-                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>+{selectedActions.length - 10} ещё</span>
+                      {p.status === 'SUBMITTED' && isAuthor && sessionVerified && signMessage && (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={() => void handleWithdraw(p.id)}
+                          disabled={withdrawingId === p.id}
+                        >
+                          {withdrawingId === p.id ? 'Снятие…' : 'Снять с голосования'}
+                        </Button>
                       )}
-                    </div>
+                    </>
                   </div>
                 )}
               </div>

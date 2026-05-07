@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1920" />
+    <title>Рисунок 2.5 — Новости (макет)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./thesis-mockups.css" />
+    <style>
+      .tm-news-inner {
+        max-width: 900px;
+        margin: 0 auto;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+      .tm-news-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 1;
+        overflow: hidden;
+      }
+      .tm-news-card {
+        display: block;
+        text-decoration: none;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        padding: 16px 18px;
+        color: inherit;
+      }
+      .tm-news-card:hover {
+        border-color: var(--accent);
+        background: var(--table-row-hover);
+      }
+      .tm-news-card h2 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--accent);
+        line-height: 1.35;
+      }
+      .tm-news-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      .tm-news-date {
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .tm-news-desc {
+        margin: 8px 0 0;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .tm-news-foot {
+        margin-top: 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .tm-news-link {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tm-viewport">
+      <header class="tm-header">
+        <div class="tm-brand">
+          <span class="tm-brand-mark">VSAT</span>
+          <span class="tm-brand-name">diploma-z96a</span>
+        </div>
+        <nav class="tm-nav">
+          <a href="#">Главная</a>
+          <a href="#">О нас</a>
+          <a href="#">Глобальная сеть</a>
+          <a href="#">Песочница</a>
+          <a href="#">Предложения</a>
+          <a href="#" class="tm-active">Новости</a>
+        </nav>
+        <div class="tm-header-actions">
+          <button type="button" class="tm-btn tm-btn-primary">Подключить</button>
+        </div>
+      </header>
+
+      <main class="tm-main" style="padding: 18px 28px 22px">
+        <div class="tm-news-inner">
+          <h1 style="margin: 0 0 6px; font-size: 30px; font-weight: 700">Новости</h1>
+          <p class="tm-muted" style="margin: 0 0 18px; font-size: 14px">
+            Актуальные материалы по телекоммуникациям, устойчивости сетей и интеграции с Web3.
+          </p>
+
+          <div class="tm-news-list">
+            <a href="#" class="tm-news-card">
+              <div class="tm-news-top">
+                <h2>ITU: обновление рекомендаций по устойчивости наземных магистралей</h2>
+                <span class="tm-news-date">22.04.2026</span>
+              </div>
+              <p class="tm-news-desc">Краткий обзор изменений в нормативной базе и влияние на проектирование резервных каналов.</p>
+              <div class="tm-news-foot">
+                <span>Источник: ITU News</span>
+                <span class="tm-news-link">Открыть →</span>
+              </div>
+            </a>
+
+            <a href="#" class="tm-news-card">
+              <div class="tm-news-top">
+                <h2>Спутниковый LEO: сравнение задержек при аварийном переключении</h2>
+                <span class="tm-news-date">20.04.2026</span>
+              </div>
+              <p class="tm-news-desc">Практические измерения и выводы для сценариев «интернет частично недоступен».</p>
+              <div class="tm-news-foot">
+                <span>Источник: Telecom Weekly</span>
+                <span class="tm-news-link">Открыть →</span>
+              </div>
+            </a>
+
+            <a href="#" class="tm-news-card">
+              <div class="tm-news-top">
+                <h2>Solana: обновление клиента и рекомендации для подписи голосов</h2>
+                <span class="tm-news-date">17.04.2026</span>
+              </div>
+              <p class="tm-news-desc">Заметки для разработчиков on-chain голосования и проверки сессий кошелька.</p>
+              <div class="tm-news-foot">
+                <span>Источник: Solana Foundation</span>
+                <span class="tm-news-link">Открыть →</span>
+              </div>
+            </a>
+
+            <a href="#" class="tm-news-card">
+              <div class="tm-news-top">
+                <h2>Mesh в городской среде: ограничения по мощности и лицензированию</h2>
+                <span class="tm-news-date">14.04.2026</span>
+              </div>
+              <p class="tm-news-desc">Сводка требований для пилотных зон и интеграции с существующей инфраструктурой.</p>
+              <div class="tm-news-foot">
+                <span>Источник: Регулятор связи (обзор)</span>
+                <span class="tm-news-link">Открыть →</span>
+              </div>
+            </a>
+
+            <a href="#" class="tm-news-card">
+              <div class="tm-news-top">
+                <h2>VSAT-терминалы: тренды по энергопотреблению в 2026 году</h2>
+                <span class="tm-news-date">10.04.2026</span>
+              </div>
+              <p class="tm-news-desc">Компактные станции для аварийных узлов и сценариев длительного автономного режима.</p>
+              <div class="tm-news-foot">
+                <span>Источник: Satellite Today</span>
+                <span class="tm-news-link">Открыть →</span>
+              </div>
+            </a>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

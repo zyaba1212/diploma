@@ -103,7 +103,12 @@ export async function POST(req: Request, { params }: Params) {
   });
 
   if (!proposal) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  if (proposal.status === 'REJECTED' || proposal.status === 'APPLIED' || proposal.status === 'CANCELLED') {
+  if (
+    proposal.status === 'REJECTED' ||
+    proposal.status === 'APPLIED' ||
+    proposal.status === 'CANCELLED' ||
+    proposal.status === 'WITHDRAWN'
+  ) {
     return NextResponse.json({ error: 'proposal cannot be modified in this status' }, { status: 409 });
   }
   if (!canAppendSingleChangeAction(proposal.status)) {

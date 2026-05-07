@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1920" />
+    <title>Рисунок 2.6 — Админ-панель (макет)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./thesis-mockups.css" />
+    <style>
+      .tm-admin {
+        max-width: 1100px;
+        margin: 0 auto;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .tm-admin-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .tm-admin-top h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .tm-admin-top p {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .tm-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--panel);
+      }
+      .tm-tabs a {
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 13px;
+        text-decoration: none;
+        color: var(--muted);
+      }
+      .tm-tabs a.tm-tab-active {
+        background: var(--table-row-hover);
+        color: var(--text);
+        font-weight: 600;
+      }
+      .tm-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+      }
+      .tm-kpi {
+        padding: 14px 16px;
+      }
+      .tm-kpi .v {
+        font-size: 24px;
+        font-weight: 700;
+        margin-top: 4px;
+      }
+      .tm-kpi .t {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .tm-audit {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .tm-audit h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .tm-audit-inner {
+        flex: 1;
+        overflow: hidden;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tm-viewport">
+      <main class="tm-main" style="padding: 16px 24px 20px">
+        <div class="tm-admin">
+          <div class="tm-admin-top">
+            <div>
+              <h1>Админ-панель</h1>
+              <p>Роль: <strong style="color: var(--text)">ADMIN</strong> · Профиль: <strong style="color: var(--text)">staff_root</strong></p>
+            </div>
+            <button type="button" class="tm-btn tm-btn-primary">Выйти</button>
+          </div>
+
+          <nav class="tm-tabs" aria-label="Разделы админки">
+            <a href="#" class="tm-tab-active">Обзор</a>
+            <a href="#">Пользователи</a>
+            <a href="#">Предложения</a>
+            <a href="#">Сессии</a>
+            <a href="#">Новости</a>
+            <a href="#">Аудит</a>
+          </nav>
+
+          <div class="tm-kpi-grid">
+            <section class="tm-panel tm-kpi">
+              <div class="t">Активные пользователи</div>
+              <div class="v">128</div>
+            </section>
+            <section class="tm-panel tm-kpi">
+              <div class="t">Предложения на модерации</div>
+              <div class="v">5</div>
+            </section>
+            <section class="tm-panel tm-kpi">
+              <div class="t">Активные сессии</div>
+              <div class="v">3</div>
+            </section>
+            <section class="tm-panel tm-kpi">
+              <div class="t">События аудита (24 ч)</div>
+              <div class="v">46</div>
+            </section>
+          </div>
+
+          <section class="tm-audit">
+            <h2>Последние действия</h2>
+            <div class="tm-audit-inner">
+              <table class="tm-table">
+                <thead>
+                  <tr>
+                    <th>Время</th>
+                    <th>Событие</th>
+                    <th>Актор</th>
+                    <th>Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>24.04.2026, 09:41</td>
+                    <td>Изменение роли пользователя</td>
+                    <td>staff_root</td>
+                    <td><span class="tm-status tm-status-ok">Ок</span></td>
+                  </tr>
+                  <tr>
+                    <td>24.04.2026, 09:12</td>
+                    <td>Публикация новости из кэша</td>
+                    <td>moderator_2</td>
+                    <td><span class="tm-status tm-status-ok">Ок</span></td>
+                  </tr>
+                  <tr>
+                    <td>23.04.2026, 21:05</td>
+                    <td>Отклонение предложения сети</td>
+                    <td>moderator_1</td>
+                    <td><span class="tm-status tm-status-review">На проверке</span></td>
+                  </tr>
+                  <tr>
+                    <td>23.04.2026, 18:30</td>
+                    <td>Выход из staff-сессии</td>
+                    <td>staff_root</td>
+                    <td><span class="tm-status tm-status-ok">Ок</span></td>
+                  </tr>
+                  <tr>
+                    <td>23.04.2026, 11:02</td>
+                    <td>Неудачная попытка входа в админку</td>
+                    <td>unknown</td>
+                    <td><span class="tm-status tm-status-bad">Отказ</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

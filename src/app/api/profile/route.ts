@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { computeUsernameNextChangeAt } from '@/lib/username';
 
 /**
  * GET /api/profile?pubkey=<base58>
  * Публичные данные профиля по pubkey (без секретов).
+ * Поле `usernameNextChangeAt` — момент, после которого пользователю будет
+ * разрешена очередная смена никнейма (или `null`, если смена доступна сейчас).
  */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -23,6 +26,7 @@ export async function GET(req: Request) {
         pubkey,
         username: null,
         usernameSetAt: null,
+        usernameNextChangeAt: null,
         createdAt: null,
         inDatabase: false,
         isBanned: false,
@@ -32,12 +36,14 @@ export async function GET(req: Request) {
   }
 
   const isBanned = user.bannedAt != null;
+  const nextChangeAt = computeUsernameNextChangeAt(user.usernameSetAt);
 
   return NextResponse.json(
     {
       pubkey: user.pubkey,
       username: user.username,
       usernameSetAt: user.usernameSetAt?.toISOString() ?? null,
+      usernameNextChangeAt: nextChangeAt?.toISOString() ?? null,
       createdAt: user.createdAt.toISOString(),
       inDatabase: true,
       isBanned,

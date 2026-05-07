@@ -3,7 +3,13 @@ import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { prisma } from '@/lib/prisma';
 import { isUserBanned, userBannedResponseOk } from '@/lib/user-ban';
-import { buildUsernameMessage, normalizeUsername, validateUsernameFormat } from '@/lib/username';
+import {
+  buildUsernameMessage,
+  computeUsernameNextChangeAt,
+  formatUsernameCooldownRemaining,
+  normalizeUsername,
+  validateUsernameFormat,
+} from '@/lib/username';
 
 type Body = {
   publicKey?: string;
@@ -15,8 +21,9 @@ type Body = {
 
 /**
  * POST /api/profile/username
- * Обновление username с учетом подписи и уникальности.
- * `usernameSetAt` обновляется при каждой успешной смене username.
+ * Обновление username с учётом подписи, уникальности и политики cooldown.
+ * Никнейм можно менять, но не чаще одного раза в 30 дней.
+ * Идемпотентный случай (тот же ник) разрешён всегда, без сброса таймера.
  */
 export async function POST(req: Request) {
   let body: Body;
@@ -74,11 +81,33 @@ export async function POST(req: Request) {
       select: { username: true, usernameSetAt: true },
     });
 
-    if (existing?.username) {
-      // Идемпотентный случай: ник тот же, и он уже был сохранен ранее.
-      // Политику "запрета смены при usernameSetAt != null" больше не применяем.
-      if (existing.username === username && existing.usernameSetAt) {
-        return NextResponse.json({ ok: true, username, idempotent: true });
+    // Идемпотентный случай: ник тот же. Разрешаем всегда и не сдвигаем таймер.
+    if (existing?.username === username && existing.usernameSetAt) {
+      return NextResponse.json({
+        ok: true,
+        username,
+        idempotent: true,
+        usernameSetAt: existing.usernameSetAt.toISOString(),
+        usernameNextChangeAt: computeUsernameNextChangeAt(existing.usernameSetAt)?.toISOString() ?? null,
+      });
+    }
+
+    // Cooldown-проверка: если ник уже был зафиксирован и пытаемся сменить на другой до истечения периода.
+    if (existing?.usernameSetAt) {
+      const nextAt = computeUsernameNextChangeAt(existing.usernameSetAt);
+      if (nextAt) {
+        const msRemaining = nextAt.getTime() - Date.now();
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `смена никнейма доступна через ${formatUsernameCooldownRemaining(msRemaining)}`,
+            code: 'username_cooldown',
+            msRemaining,
+            nextChangeAt: nextAt.toISOString(),
+            usernameSetAt: existing.usernameSetAt.toISOString(),
+          },
+          { status: 429 },
+        );
       }
     }
 
@@ -89,7 +118,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'username taken' }, { status: 409 });
     }
 
-    await prisma.user.upsert({
+    const saved = await prisma.user.upsert({
       where: { pubkey: publicKey },
       create: {
         pubkey: publicKey,
@@ -100,9 +129,15 @@ export async function POST(req: Request) {
         username,
         usernameSetAt: new Date(),
       },
+      select: { usernameSetAt: true },
     });
 
-    return NextResponse.json({ ok: true, username });
+    return NextResponse.json({
+      ok: true,
+      username,
+      usernameSetAt: saved.usernameSetAt?.toISOString() ?? null,
+      usernameNextChangeAt: computeUsernameNextChangeAt(saved.usernameSetAt)?.toISOString() ?? null,
+    });
   } catch {
     return NextResponse.json({ ok: false, error: 'request failed' }, { status: 400 });
   }

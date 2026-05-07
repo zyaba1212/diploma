@@ -52,6 +52,7 @@
 - `src/lib/three/` — утилиты глобуса (`globeAppearance.ts`, `globeMapSync.ts`, …).
 - `src/lib/geo/` — bbox, нормализация координат, фильтрация сети.
 - `src/lib/stage7/networkElementOps.ts` — валидация payload для CREATE/UPDATE элементов в proposals (важно: список допустимых типов здесь — см. раздел 6).
+- `src/lib/networkLegend/registry.ts` — единый реестр легенды карт: строки с `type`, совпадающим с `NetworkElementType` или **семантическим** ключом (как `SATELLITE_BACKHAUL` для линии). Семантические узлы сценария используют поле `visualType` — реальный тип для иконки/цвета, чтобы не подменять глобальные подписи `TYPE_LABELS_RU` (например, «клиент» в референсе — это роль поверх `MODEM`). Условные группы (сценарий Минска) подмешиваются на `/networks/[id]` при `metadata.scenario === 'digital-ruble-offline-minsk'`; см. `scenarioDetection.ts`.
 
 ## 4. Доменная модель сети в БД (`prisma/schema.prisma`)
 

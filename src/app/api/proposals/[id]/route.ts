@@ -7,6 +7,8 @@ import type { ProposalStatus } from '@prisma/client';
 import { getClientIp, checkRateLimit } from '@/lib/rateLimit';
 import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
 import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
+import { canCommitProposalGraphRevision } from '@/lib/stage7/proposalMutationPolicy';
+import { isPinnedGraphSupereditAuthor } from '@/lib/stage7/pinnedGraphSupereditAuthors';
 
 type Params = {
   params: Promise<{
@@ -30,7 +32,7 @@ export async function GET(_req: Request, { params }: Params) {
           orderBy: { createdAt: 'asc' },
         },
         _count: {
-          select: { votes: true },
+          select: { votes: true, revisions: true, forksFromThis: true },
         },
       },
     });
@@ -39,7 +41,23 @@ export async function GET(_req: Request, { params }: Params) {
       return NextResponse.json({ error: 'not found' }, { status: 404 });
     }
 
-    return NextResponse.json(proposal, { headers: { 'cache-control': 'no-store' } });
+    const voteCount = proposal._count.votes;
+    const pinnedGraphSuperedit =
+      proposal.pinned && (await isPinnedGraphSupereditAuthor(proposal.authorPubkey));
+    const commitSandboxGraphInPlace = canCommitProposalGraphRevision({
+      status: proposal.status,
+      voteCount,
+      onChainTxSignature: proposal.onChainTxSignature,
+      pinnedGraphSuperedit,
+    });
+
+    return NextResponse.json(
+      {
+        ...proposal,
+        capabilities: { commitSandboxGraphInPlace },
+      },
+      { headers: { 'cache-control': 'no-store' } },
+    );
   } catch (err) {
     console.error('Failed to get proposal', err);
     return NextResponse.json({ error: 'internal error' }, { status: 500 });
@@ -108,6 +126,7 @@ export async function PATCH(req: Request, { params }: Params) {
       title: true,
       description: true,
       onChainTxSignature: true,
+      pinned: true,
     },
   });
 
@@ -117,11 +136,14 @@ export async function PATCH(req: Request, { params }: Params) {
   }
 
   const voteCount = await prisma.vote.count({ where: { proposalId: id } });
+  const pinnedGraphSuperedit =
+    proposal.pinned && (await isPinnedGraphSupereditAuthor(proposal.authorPubkey));
   if (
     !canPatchProposalMetadata({
       status: proposal.status,
       voteCount,
       onChainTxSignature: proposal.onChainTxSignature,
+      pinnedGraphSuperedit,
     })
   ) {
     return NextResponse.json(
@@ -170,7 +192,7 @@ export async function PATCH(req: Request, { params }: Params) {
       if (descriptionNext !== undefined) data.description = descriptionNext;
       await tx.proposal.update({ where: { id }, data });
 
-      if (proposal.status === 'SUBMITTED') {
+      if (proposal.status === 'SUBMITTED' || proposal.status === 'WITHDRAWN') {
         const full = await tx.proposal.findUnique({
           where: { id },
           select: {

@@ -47,6 +47,10 @@ export const AuditAction = {
   ProposalPin: 'proposal.pin',
   ProposalUnpin: 'proposal.unpin',
   ProposalForceCancel: 'proposal.force_cancel',
+  /** Выход из CANCELLED staff-операцией (сброс cancel-полей, см. PATCH admin/proposals/[id]). */
+  ProposalResetFromCancelled: 'proposal.reset_from_cancelled',
+  /** Произвольная смена статуса staff (кроме APPLIED), см. PATCH `staffSetStatus`. */
+  ProposalStaffSetStatus: 'proposal.staff_set_status',
   ProposalForceRollback: 'proposal.force_rollback',
   /** Жёсткое удаление строки предложения из БД (только staff / см. админ-API). */
   ProposalAdminHardDelete: 'proposal.admin_hard_delete',

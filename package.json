@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/prisma-generate-safe.mjs",
-    "dev": "next dev --hostname 0.0.0.0",
-    "dev:clean": "node scripts/clean-next.mjs && next dev --hostname 0.0.0.0",
+    "dev": "next dev --hostname 0.0.0.0 --turbo",
+    "dev:webpack": "next dev --hostname 0.0.0.0",
+    "dev:clean": "node scripts/clean-next.mjs && next dev --hostname 0.0.0.0 --turbo",
+    "dev:webpack:clean": "node scripts/clean-next.mjs && next dev --hostname 0.0.0.0",
     "dev:turbo": "next dev --hostname 0.0.0.0 --turbo",
     "build": "node scripts/clean-next.mjs && next build",
     "start": "next start",
@@ -28,6 +30,7 @@
     "test:proposals-submit": "node scripts/test-proposals-submit-onchain.mjs",
     "test:proposals-stage7": "node scripts/test-proposals-stage7.mjs",
     "test:proposals-stage8": "node scripts/test-proposals-stage8.mjs",
+    "test:proposals-revisions": "node scripts/test-proposals-revisions-smoke.mjs",
     "test:auth-profile-smoke": "node scripts/api-profile-smoke.mjs",
     "test:admin-smoke": "node scripts/test-admin-smoke.mjs",
     "migrate:moderator-env": "node scripts/migrate-moderator-env.mjs",
@@ -37,9 +40,11 @@
     "scripts:smoke-network-extent": "node scripts/smoke-network-data-extent.mjs",
     "scripts:sync-news": "node scripts/sync-news.mjs",
     "scripts:sync-news-db": "tsx scripts/sync-news-db.ts",
+    "scripts:news-backfill": "tsx scripts/news-backfill.ts",
     "scripts:backfill-server-source-urls": "node scripts/backfill-server-source-urls.mjs",
     "scripts:backfill-major-datacenters-dataset": "node scripts/backfill-major-datacenters-dataset.mjs",
-    "scripts:backfill-satellite-satcat-metadata": "node scripts/backfill-satellite-satcat-metadata.mjs"
+    "scripts:backfill-satellite-satcat-metadata": "node scripts/backfill-satellite-satcat-metadata.mjs",
+    "thesis:mockups-png": "node scripts/thesis-mockups-screenshot.mjs"
   },
   "dependencies": {
     "@prisma/client": "6.4.1",
@@ -67,6 +72,7 @@
     "@types/three": "^0.183.1",
     "eslint": "^9.22.0",
     "eslint-config-next": "^15.5.0",
+    "playwright": "^1.51.0",
     "prettier": "^3.5.3",
     "prisma": "6.4.1",
     "tsx": "^4.19.3",

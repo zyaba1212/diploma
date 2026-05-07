@@ -74,7 +74,7 @@ async function main() {
   assert(b3.username === username2, 'username must be overridden');
   assert(typeof b3.usernameSetAt === 'string' && b3.usernameSetAt.length > 0, 'expected usernameSetAt non-null after override');
 
-  // 4) Re-changing should be allowed.
+  // 4) Re-changing within 30-day cooldown must be rejected (429).
   const username3 = `cab_${(Date.now() + 2).toString().slice(-10)}`;
   const ts3 = new Date().toISOString();
   const message3 = `diploma-z96a username\npubkey=${pubkey}\nusername=${username3}\nts=${ts3}`;
@@ -87,17 +87,17 @@ async function main() {
     signature: sig3,
     username: username3,
   });
-  assert(r4.res.status === 200, `expected 200 on changing username after set; got ${r4.res.status}; body=${JSON.stringify(r4.json)}`);
-  assert(r4.json?.ok === true, `expected ok=true on second username change; body=${JSON.stringify(r4.json)}`);
+  assert(r4.res.status === 429, `expected 429 cooldown on second change within a month; got ${r4.res.status}; body=${JSON.stringify(r4.json)}`);
+  assert(r4.json?.ok === false && r4.json?.code === 'username_cooldown', `expected cooldown payload; body=${JSON.stringify(r4.json)}`);
 
   const r5 = await fetch(`${BASE_URL}/api/profile?pubkey=${encodeURIComponent(pubkey)}`);
   const b5 = await r5.json();
-  assert(r5.status === 200, `GET /api/profile after 2nd change status ${r5.status}`);
-  assert(b5.username === username3, 'username must update after second change');
-  assert(typeof b5.usernameSetAt === 'string' && b5.usernameSetAt.length > 0, 'expected usernameSetAt non-null after 2nd change');
+  assert(r5.status === 200, `GET /api/profile after cooldown rejection status ${r5.status}`);
+  assert(b5.username === username2, 'username must remain after cooldown rejection');
+  assert(typeof b5.usernameNextChangeAt === 'string' && b5.usernameNextChangeAt.length > 0, 'expected usernameNextChangeAt set');
 
   // Helpful log for visibility.
-  console.log('api-auth-verify-auto-username: OK', { username1, username2, username3 });
+  console.log('api-auth-verify-auto-username: OK', { username1, username2, cooldownRejected: username3 });
 }
 
 main().catch((err) => {

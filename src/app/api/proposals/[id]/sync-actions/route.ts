@@ -11,8 +11,9 @@ import { assertBodySizeWithin } from '@/lib/bodySizeGuard';
 import { internalApiError } from '@/lib/apiError';
 import { buildNetworkElementCreateData, isNetworkElementType } from '@/lib/stage7/networkElementOps';
 import { canReplaceActionsViaSandboxSync } from '@/lib/stage7/proposalMutationPolicy';
-import { computeProposalContentHashHexFromDbActions } from '@/lib/stage7/proposalContentHashServer';
+import { replaceProposalChangeActionsWithCreatesInTx } from '@/lib/stage7/replaceProposalSandboxCreates';
 import { isUserBanned, userBannedResponsePlain } from '@/lib/user-ban';
+import { isPinnedGraphSupereditAuthor } from '@/lib/stage7/pinnedGraphSupereditAuthors';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -62,17 +63,21 @@ export async function POST(req: Request, { params }: Params) {
       title: true,
       description: true,
       onChainTxSignature: true,
+      pinned: true,
     },
   });
 
   if (!proposal) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
   const voteCount = await prisma.vote.count({ where: { proposalId: id } });
+  const pinnedGraphSuperedit =
+    proposal.pinned && (await isPinnedGraphSupereditAuthor(proposal.authorPubkey));
   if (
     !canReplaceActionsViaSandboxSync({
       status: proposal.status,
       voteCount,
       onChainTxSignature: proposal.onChainTxSignature,
+      pinnedGraphSuperedit,
     })
   ) {
     return NextResponse.json(
@@ -120,35 +125,14 @@ export async function POST(req: Request, { params }: Params) {
 
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.changeAction.deleteMany({ where: { proposalId: id } });
-      for (const elementPayload of payloads) {
-        await tx.changeAction.create({
-          data: {
-            proposalId: id,
-            actionType: 'CREATE',
-            targetElementId: null,
-            elementPayload,
-          },
-        });
-      }
-
-      if (proposal.status === 'SUBMITTED') {
-        const actions = await tx.changeAction.findMany({
-          where: { proposalId: id },
-          orderBy: { createdAt: 'asc' },
-          select: { actionType: true, targetElementId: true, elementPayload: true },
-        });
-        const newHash = computeProposalContentHashHexFromDbActions({
-          scope: proposal.scope,
-          title: proposal.title,
-          description: proposal.description,
-          actions,
-        });
-        await tx.proposal.update({
-          where: { id },
-          data: { contentHash: newHash },
-        });
-      }
+      await replaceProposalChangeActionsWithCreatesInTx(tx, {
+        proposalId: id,
+        scope: proposal.scope,
+        title: proposal.title,
+        description: proposal.description,
+        status: proposal.status,
+        payloads,
+      });
     });
 
     return NextResponse.json(

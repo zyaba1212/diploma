@@ -131,13 +131,14 @@ diploma/
 ### Модели
 
 - **`User`** — `pubkey` (unique). Опциональный `username` (unique) + `usernameSetAt`. Опционально `moderatorGrant` (1:1) — право решать в `/api/moderation/*` и входить в админку как `MODERATOR`. Stage 13: `bannedAt?`, `bannedReason?`.
-  - `usernameSetAt == null` ⇒ username авто-сгенерирован, **можно переопределить** (через подпись).
-  - `usernameSetAt != null` ⇒ переопределение **запрещено** (403).
+  - `usernameSetAt == null` ⇒ username авто-сгенерирован, первичная фиксация **разрешена** (через подпись) и начинает cooldown.
+  - `usernameSetAt != null` ⇒ смена разрешена не чаще одного раза в 30 дней: попытка сменить ник до истечения периода ⇒ **429** c телом `{ code: 'username_cooldown', msRemaining, nextChangeAt }`. Повторная отправка того же ника — идемпотентный 200 (не сдвигает таймер).
 - **`StaffSession`** — серверная сессия для `/admin`: `tokenHash` (SHA-256 от opaque-токена из cookie), `role` (`ADMIN` \| `MODERATOR`), `pubkey?` (для входа через Phantom), `expiresAt`.
 - **`ModeratorGrant`** — `userId` (PK/FK → `User`): кошелёк уже есть в БД; `grantedAt`, опционально `grantedByStaffSessionId`.
 - **`NetworkProvider`** — `name + scope`, связь `elements: NetworkElement[]`.
 - **`NetworkElement`** — `type`, `scope`, `providerId?`, `lat/lng/altitude?`, `path: Json?` (для кабелей), `metadata: Json?`, `sourceId?` (unique, для дедупликации импорта). Индексы под geo-запросы: `[scope]`, `[scope, type]`, `[scope, lat, lng]`, `[type]`, `[lat, lng]`.
-- **`Proposal`** — `scope`, `authorPubkey` (логически ссылается на `User.pubkey`), `status`, `title?`, `description?`, `pinned`, временные метки. Stage 6 submission facts (опциональны): `contentHash?`, `signature?` (base58), `onChainTxSignature?`, `onChainSubmittedAt?`. Stage 13: `cancelledByStaffSessionId?`, `cancelReason?`, `rejectionReason?`. Связи: `actions: ChangeAction[]`, `votes: Vote[]`, `moderationDecision?`, `feedbacks: ProposalFeedback[]`. Много индексов.
+- **`Proposal`** — `scope`, `authorPubkey` (логически ссылается на `User.pubkey`), `status`, `title?`, `description?`, `pinned`, временные метки. Stage 6 submission facts (опциональны): `contentHash?`, `signature?` (base58), `onChainTxSignature?`, `onChainSubmittedAt?`. Stage 13: `cancelledByStaffSessionId?`, `cancelReason?`, `rejectionReason?`. Песочница / история: `headRevisionId?`, `forkedFromProposalId?`. Связи: `actions: ChangeAction[]`, `votes: Vote[]`, `moderationDecision?`, `feedbacks: ProposalFeedback[]`, `revisions: ProposalRevision[]`. Много индексов.
+- **`ProposalRevision`** — снимок графа из песочницы (`snapshot` Json), `message`, цепочка `parentRevisionId`, флаг `isBaseline`, сводка `diffSummary`; связана с `Proposal`.
 - **`ChangeAction`** — `proposalId`, `actionType`, `targetElementId?`, `elementPayload: Json`, `reversePayload: Json?`.
 - **`HistoryEntry`** — Stage 7 apply/rollback: `proposalId`, `actionId`, `appliedByPubkey?`, `appliedAt`, `diff: Json` (снепшот, достаточный для отката).
 - **`ModerationDecision`** (Stage 12) — `proposalId` (unique), `moderatorPubkey`, `fromStatus → toStatus`, `decidedAt`, `decisionSignature?`, `comment?` (Stage 13).
@@ -157,7 +158,7 @@ diploma/
 - `/networks` — список предложений; `/networks/[id]` — детали и голосование.
 - `/propose` — создание предложения изменения сети (+ алиас `/predlozhit`).
 - `/news` — лента новостей (из `NewsCache`).
-- `/cabinet` — личный кабинет: показывает `username`, позволяет переопределить только если `usernameSetAt === null`, подпись кошельком.
+- `/cabinet` — личный кабинет: показывает `username` и дату последней смены; позволяет сменить никнейм, но не чаще одного раза в 30 дней. Пока действует cooldown, форма заблокирована, а пользователю показывается живой обратный отсчёт до следующей разрешённой смены.
 - `/moderate` — **редирект** на `/admin/moderation` (старый Phantom-UI заменён staff-очередью в админке).
 - `/admin` — при валидной staff-сессии редирект на `/admin/overview`; без сессии → `/admin/login`.
 - `/admin/login` — вход только через Phantom: подпись nonce (`GET /api/admin/auth/nonce`); `ADMIN_WALLET_PUBKEY` → роль `ADMIN`, иначе при праве модератора → `MODERATOR`.
@@ -172,8 +173,8 @@ diploma/
 ### Auth / Profile
 
 - `POST /api/auth` и `POST /api/auth/verify` — проверка подписи через `tweetnacl + bs58`, `upsert User`; при первом входе backend **авто-генерирует уникальный `username`** (`usernameSetAt = null`).
-- `GET /api/profile?pubkey=` → `{ username, usernameSetAt, inDatabase }`. Если записи ещё нет: `inDatabase: false`, поля `null`.
-- `POST /api/profile/username` — установка username подписью сообщения `diploma-z96a username\npubkey=<pk>\nusername=<u>\nts=<ts>` (см. `src/lib/username.ts`, `buildUsernameMessage`). 409 при конфликте, 403 если `usernameSetAt != null`.
+- `GET /api/profile?pubkey=` → `{ username, usernameSetAt, usernameNextChangeAt, inDatabase }`. Если записи ещё нет: `inDatabase: false`, поля `null`. Поле `usernameNextChangeAt` — ISO-timestamp момента, после которого разрешена следующая смена (или `null`, если смена доступна сразу).
+- `POST /api/profile/username` — установка username подписью сообщения `diploma-z96a username\npubkey=<pk>\nusername=<u>\nts=<ts>` (см. `src/lib/username.ts`, `buildUsernameMessage`). 409 при конфликте имени; **429** с `{ code: 'username_cooldown', msRemaining, nextChangeAt }`, если после последней смены не прошло 30 дней; повторная отправка того же ника — идемпотентный 200 (без сдвига таймера).
 - `GET /api/profile/bulk` — массовый lookup по нескольким pubkey.
 
 ### Admin (staff session, httpOnly `diploma_staff_session`)
@@ -205,7 +206,10 @@ diploma/
 - `POST /api/proposals/[id]/rollback` — откатить последнюю `HistoryEntry` по `Proposal`.
 - `GET /api/proposals/[id]/history` — список history entries.
 - `POST /api/proposals/[id]/vote` — голосование `FOR/AGAINST` (unique per voterPubkey).
-- `POST /api/proposals/[id]/sync-actions` — синхронизация actions (новый маршрут, в активной разработке).
+- `POST /api/proposals/[id]/sync-actions` — полная замена `ChangeAction` набором CREATE из песочницы (подпись автора). Разрешено для `DRAFT`, `WITHDRAWN`, `SUBMITTED`; для `SUBMITTED` не блокируется числом голосов и наличием `onChainTxSignature` (после правок пересчитывается `contentHash` — см. DEVELOPMENT_JOURNAL).
+- `GET|POST /api/proposals/[id]/revisions` — история ревизий графа в песочнице (git-подобные коммиты): `GET` список; `POST` новая ревизия + замена actions + optimistic lock `baseRevisionId` (подпись `diploma-z96a propose:revision:<id>:<base|null>`). Те же статусы и исключение блокировки по голосам/on-chain, что и у `sync-actions`.
+- `GET /api/proposals/[id]/revisions/[revisionId]` — полный снимок ревизии.
+- `POST /api/proposals/[id]/fork` — новое `DRAFT` предложение из массива `creates`, связь `forkedFromProposalId` (подпись `diploma-z96a propose:fork:<sourceId>`).
 
 ### Moderation (Stage 12)
 
@@ -217,7 +221,10 @@ diploma/
 - `GET /api/health` → `{ ok: true, app: "ok", db: "ok" }` или `503 { error: "health check failed" }`. Делает `SELECT 1` через Prisma.
 - `GET /api/tile?z&x&y&source=osm|...` — прокси тайлов для Leaflet.
 - `GET /api/geocode/search?q=`, `GET /api/geocode/reverse?lat&lng=`, `GET /api/geocode/nearby` — прокси с кешем (`geocodeCache.ts`) и circuit breaker.
-- `GET /api/news` — агрегация новостей из `NewsCache`/внешних источников.
+- `GET /api/news` — выборка из `NewsCache` с пагинацией (`page`, `pageSize`, `days`, ответ `items`/`total`/`hasMore`/`windowDays`); перед выборкой — `fetchAndCacheNews()` (RSS). Legacy: `?legacy=1&limit&offset`.
+- `GET/POST /api/cron/news-sync` — принудительный RSS→`NewsCache` (секрет или `x-vercel-cron`).
+- `GET/POST /api/cron/news-deep-backfill` — ночной deep backfill по sitemap (см. `vercel.json`, `docs/operations.md`).
+- `npm run scripts:news-backfill` — CLI: `--mode=rss` (хвост RSS) или `--mode=deep` (sitemap/история).
 
 ### Общая инфраструктура API
 
@@ -287,7 +294,7 @@ diploma/
 - Кабели: `sync-submarine-cables.mjs` (Open Undersea Cable Map), `sync-underground-cables.mjs` (data.gov.au Gold Coast, CC-BY 3.0 AU), `sync-underground-copper-cables-osm.mjs` (Overpass, ODbL), `sync-osm-terrestrial-fibre.mjs` (Overpass `man_made=cable`+`telecom:medium=fibre`, ODbL; opt-in через `SEED_IMPORT_OSM_TERRESTRIAL_FIBRE=1`), `sync-afterfibre.mjs` (AfTerFibre terrestrial fibre для Африки, CC-BY 4.0; opt-in через `SEED_IMPORT_AFTERFIBRE=1`).
 - Узлы/инфраструктура: `sync-base-stations-osm.mjs`, `sync-major-datacenters.mjs`, `sync-derived-nodes-from-cables.mjs`.
 - Спутники: `sync-satellites-tle-celestrak.mjs`, `sync-satellites.mjs`.
-- Новости: `sync-news.mjs`, `sync-news-db.ts`.
+- Новости: [`scripts/news-backfill.ts`](../scripts/news-backfill.ts) (`npm run scripts:news-backfill`), live RSS в [`src/lib/news.ts`](../src/lib/news.ts), cron [`/api/cron/news-sync`](../src/app/api/cron/news-sync/route.ts).
 - Maintenance: `purge-representative-backbone.mjs` — одноразовая очистка устаревшего синтетического слоя backbone-маршрутов (см. [DEVELOPMENT_JOURNAL.md](../DEVELOPMENT_JOURNAL.md)).
 
 #### Источники данных и лицензии (terrestrial/underground fibre)
@@ -363,8 +370,8 @@ npm run db:seed
 
 - `dev`, `dev:clean`, `dev:turbo`, `build`, `start`, `lint`, `format`, `format:write`.
 - Prisma: `prisma:generate`, `prisma:deploy`, `prisma:sync`, `prisma:migrate`, `db:reset`, `db:seed`.
-- Тестовые: `test:proposals`, `test:proposals-submit`, `test:proposals-stage7`, `test:proposals-stage8`, `test:auth-profile-smoke`, `test:ux-globe-smoke`, `test:globe-orient`.
-- Sync: `scripts:sync-cables`, `scripts:sync-satellites`, `scripts:sync-news`, `scripts:sync-news-db`.
+- Тестовые: `test:proposals`, `test:proposals-submit`, `test:proposals-stage7`, `test:proposals-stage8`, `test:proposals-revisions`, `test:auth-profile-smoke`, `test:ux-globe-smoke`, `test:globe-orient`.
+- Sync: `scripts:sync-cables`, `scripts:sync-satellites`, `scripts:news-backfill` (новости в `NewsCache`).
 
 ---
 
@@ -434,7 +441,7 @@ npm run db:seed
 Основные файлы (все в `docs/` если не указано иначе):
 
 - **Общие**: `architecture.md`, `requirements.md`, `etapy.md`, `design.md`.
-- **Визуализация / данные**: `earth-visualization.md`, `network-data-and-sources.md`, `network-data-sources.md`, `network-repository-overview.md`, `global-network-building-spec.md`, `er-diagram-global-network-db.png`.
+- **Визуализация / данные**: `earth-visualization.md`, `map-visual-rules.md`, `map-legend-phase2-plan.md`, `network-data-and-sources.md`, `network-data-sources.md`, `network-repository-overview.md`, `global-network-building-spec.md`, `er-diagram-global-network-db.png`.
 - **Стадии**: `stage5plus.md`, `stage6.md`, `stage7.md`, `stage10-security-observability.md`, `stage11-post-launch-architecture.md`, `stage12-scope.md`, `stage12-governance-moderation-architecture.md`, `stage13-admin-panel.md`.
 - **Промпты агентов**: `agents/stage6-prompts.md`, `agents/stage7-prompts.md`, ... `agents/stage12-prompts.md`, `agents/ux-globe-phase-prompts.md`, `agents/auth-profile-phase-prompts.md`, `agents/wallet-autoconnect-prompt.md`.
 - **UX-сценарии**: `UX_User_Requests_2026-03-20.md`, `UX_User_Requests_2026-03-20_v2_site2d3d_satellite.md`.

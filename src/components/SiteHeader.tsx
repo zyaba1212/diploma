@@ -2,13 +2,17 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthorPubkey } from '@/hooks/useAuthorPubkey';
 import { useSessionVerified } from '@/hooks/useSessionVerified';
 import { resetAuthSessionClient, signAndVerifyAuthSession } from '@/lib/auth-session';
+import { openPhantomMobileApp, shouldOpenPhantomMobileDeepLink } from '@/lib/wallet-mobile-deeplink';
+import { PROFILE_UPDATED_EVENT } from '@/lib/profile-events';
 import { colors } from '@/theme/colors';
+import { Button } from '@/components/ui/Button';
 
 const NAV_LINK_STYLE: React.CSSProperties = {
   pointerEvents: 'auto',
@@ -53,6 +57,27 @@ const btnBase: React.CSSProperties = {
   transition: 'background-color 0.1s ease',
 };
 
+const MOBILE_UA_RE = /android|iphone|ipad|ipod/i;
+
+function isMobileBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return MOBILE_UA_RE.test(navigator.userAgent);
+}
+
+function hasInjectedPhantomProvider(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as Window & {
+    phantom?: { solana?: { isPhantom?: boolean } };
+    solana?: { isPhantom?: boolean };
+  };
+  return Boolean(w.phantom?.solana?.isPhantom || w.solana?.isPhantom);
+}
+
+function openPhantomDownloadPage(): void {
+  if (typeof window === 'undefined') return;
+  window.location.assign('https://phantom.app/download');
+}
+
 export function SiteHeader() {
   const pathname = usePathname() ?? '';
   const wallet = useWallet();
@@ -66,6 +91,7 @@ export function SiteHeader() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [connBusy, setConnBusy] = useState(false);
+  const [clientMounted, setClientMounted] = useState(false);
 
   const walletWrapRef = useRef<HTMLDivElement>(null);
   const mobileMenuWrapRef = useRef<HTMLDivElement>(null);
@@ -103,6 +129,12 @@ export function SiteHeader() {
   }, [loadProfile]);
 
   useEffect(() => {
+    const onProfileUpdated = () => { void loadProfile(); };
+    window.addEventListener(PROFILE_UPDATED_EVENT, onProfileUpdated);
+    return () => window.removeEventListener(PROFILE_UPDATED_EVENT, onProfileUpdated);
+  }, [loadProfile]);
+
+  useEffect(() => {
     if (!dropdownOpen) return;
     const onDown = (e: MouseEvent) => {
       if (walletWrapRef.current && !walletWrapRef.current.contains(e.target as Node)) {
@@ -132,6 +164,10 @@ export function SiteHeader() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  useEffect(() => {
+    setClientMounted(true);
+  }, []);
+
   const authorize = useCallback(async () => {
     if (!wallet.connected || !wallet.signMessage || !pubkey) return;
     setAuthBusy(true);
@@ -158,6 +194,24 @@ export function SiteHeader() {
     } catch { /* ignore */ }
     finally { setConnBusy(false); }
   }, [wallet]);
+
+  const handleConnectClick = useCallback(() => {
+    if (wallet.connecting || connBusy) return;
+    if (shouldOpenPhantomMobileDeepLink()) {
+      openPhantomMobileApp();
+      return;
+    }
+
+    openWalletModal(true);
+  }, [connBusy, openWalletModal, wallet.connecting]);
+
+  const phantomWallet = wallet.wallets.find((item) => item.adapter.name === 'Phantom');
+  const phantomNotDetected =
+    !phantomWallet ||
+    phantomWallet.readyState === WalletReadyState.NotDetected ||
+    !hasInjectedPhantomProvider();
+  const showInstallWalletButton =
+    clientMounted && !wallet.connected && phantomNotDetected && !isMobileBrowser();
 
   const displayLabel =
     sessionVerified && profile?.inDatabase && profile?.username
@@ -235,8 +289,10 @@ export function SiteHeader() {
               pointerEvents: 'none',
             }}
           >
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-md"
               className="site-header-hamburger"
               style={{
                 ...btnBase,
@@ -255,7 +311,7 @@ export function SiteHeader() {
               onClick={() => setMobileNavOpen((v) => !v)}
             >
               ☰
-            </button>
+            </Button>
           </div>
 
           {mobileNavOpen && (
@@ -323,15 +379,34 @@ export function SiteHeader() {
           }}
         >
           {!wallet.connected ? (
-            <button
-              type="button"
-              className="site-header-connect-btn"
-              style={btnBase}
-              onClick={() => openWalletModal(true)}
-              disabled={wallet.connecting || connBusy}
-            >
-              Подключить
-            </button>
+            <>
+              {showInstallWalletButton ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  tone="accent"
+                  className="site-header-connect-btn"
+                  style={{
+                    ...btnBase,
+                    borderColor: colors.accent,
+                    color: colors.accent,
+                  }}
+                  onClick={openPhantomDownloadPage}
+                >
+                  УСТАНОВИТЬ КОШЕЛЁК
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                className="site-header-connect-btn"
+                style={btnBase}
+                onClick={handleConnectClick}
+                disabled={wallet.connecting || connBusy}
+              >
+                Подключить
+              </Button>
+            </>
           ) : (
             <div style={{ position: 'relative' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
@@ -341,25 +416,27 @@ export function SiteHeader() {
                 {authorized ? (
                   <span className="site-header-wallet-badge" style={{ fontSize: 11, color: colors.text.secondary }}>авторизован</span>
                 ) : (
-                  <button
+                  <Button
                     type="button"
+                    size="sm"
                     className="site-header-wallet-btn"
                     style={{ ...btnBase, padding: '5px 8px', fontSize: 11 }}
                     onClick={() => void authorize()}
                     disabled={authBusy || !wallet.signMessage}
                   >
                     Авторизоваться
-                  </button>
+                  </Button>
                 )}
-                <button
+                <Button
                   type="button"
+                  size="sm"
                   className="site-header-wallet-btn"
                   style={{ ...btnBase, padding: '5px 8px', minWidth: 28 }}
                   onClick={() => setDropdownOpen((v) => !v)}
                   aria-expanded={dropdownOpen}
                 >
                   &#x25BE;
-                </button>
+                </Button>
               </div>
 
               {dropdownOpen && (
@@ -376,8 +453,9 @@ export function SiteHeader() {
                   <Link href="/cabinet" onClick={() => setDropdownOpen(false)} style={{ fontSize: 13, fontWeight: 600, color: colors.accent, textDecoration: 'none', padding: '6px 8px', borderRadius: 4 }}>
                     Личный кабинет
                   </Link>
-                  <button
+                  <Button
                     type="button"
+                    tone="danger"
                     style={{
                       ...btnBase,
                       width: '100%',
@@ -389,7 +467,7 @@ export function SiteHeader() {
                     disabled={connBusy || wallet.disconnecting || authBusy}
                   >
                     Отключить
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>

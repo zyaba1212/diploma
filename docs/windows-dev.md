@@ -2,20 +2,28 @@
 
 ## Watchpack Error: EINVAL … `C:\pagefile.sys`, `DumpStack.log.tmp`, …
 
-Это **известный класс предупреждений**: watcher иногда доходит до защищённых/системных путей в корне диска. В проекте в `next.config.mjs` заданы `watchOptions` (игнор `node_modules`, `.git`, `.next`, `followSymlinks: false`).
+### Root cause
+Это не пользовательский watcher из кода проекта. Ошибка возникает в dev-стеке webpack/Watchpack на Windows в фазе `initial scan`: при обходе директорий Watchpack может сделать `lstat` системных объектов в корне диска до того, как полностью отработают правила `ignored`.
 
-Если сообщения **мешают** или не исчезают:
-
-1. Запуск из каталога проекта (корень репозитория, например `C:\diploma2\diploma`), не из `C:\`.
-2. В **PowerShell** перед `npm run dev`:
-   ```powershell
-   $env:WATCHPACK_POLLING="true"
+### Принятый инженерный workflow (без маскировки)
+1. По умолчанию запускать dev через Turbopack:
+   ```bash
    npm run dev
    ```
-3. Альтернатива — **Turbopack** (другой бандлер dev):
+   (`dev` теперь указывает на `next dev --turbo`).
+2. Webpack-dev оставлен как диагностический fallback:
    ```bash
-   npm run dev:turbo
+   npm run dev:webpack
    ```
+3. Для чистого старта:
+   ```bash
+   npm run dev:clean
+   ```
+4. Запуск только из корня проекта (`C:\diploma2\diploma`), не из `C:\`.
+
+### Когда использовать webpack fallback
+- Нужно проверить поведение, специфичное для webpack-пайплайна.
+- Нужно подтвердить/сравнить воспроизводимость Watchpack EINVAL в диагностике.
 
 ## `Error: Cannot find module './331.js'` (или другой номер чанка)
 
@@ -29,7 +37,7 @@ npm run dev:clean
 
 Или вручную: удалить папку `.next`, затем `npm run dev`.
 
-Если ошибки повторяются: один процесс `next dev`, папка проекта в **исключениях** антивируса, либо **`npm run dev:turbo`** (Turbopack, без webpack dev cache).
+Если ошибки повторяются: один процесс `next dev`, папка проекта в **исключениях** антивируса, и проверка на `npm run dev:webpack` только для локализации отличий webpack/turbo.
 
 ## `ENOENT: routes-manifest.json` в `.next`
 

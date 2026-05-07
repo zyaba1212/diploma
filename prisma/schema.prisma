@@ -19,6 +19,8 @@ enum ProposalStatus {
   REJECTED
   APPLIED
   CANCELLED
+  /// Автор снял предложение с голосования (запись и действия сохраняются).
+  WITHDRAWN
 }
 
 enum ChangeActionType {
@@ -206,6 +208,16 @@ model Proposal {
   /// Комментарий модератора при REJECTED / DRAFT-возврате.
   rejectionReason           String?
 
+  /// Текущая голова цепочки ревизий песочницы (git-подобная история правок графа).
+  headRevisionId String?          @unique
+  headRevision   ProposalRevision? @relation("ProposalHeadRevision", fields: [headRevisionId], references: [id], onDelete: SetNull)
+  revisions      ProposalRevision[] @relation("ProposalRevisions")
+
+  /// Исходное предложение при fork из песочницы (опционально).
+  forkedFromProposalId String?
+  forkedFromProposal   Proposal?  @relation("ProposalForks", fields: [forkedFromProposalId], references: [id], onDelete: SetNull)
+  forksFromThis        Proposal[] @relation("ProposalForks")
+
   actions   ChangeAction[]
   votes     Vote[]
   feedbacks ProposalFeedback[]
@@ -218,6 +230,37 @@ model Proposal {
   @@index([pinned, createdAt])
   @@index([onChainTxSignature])
   @@index([onChainSubmittedAt])
+  @@index([forkedFromProposalId])
+}
+
+/// Ревизия графа сети внутри Proposal (песочница / история коммитов).
+model ProposalRevision {
+  id         String   @id @default(cuid())
+  proposalId String
+  proposal   Proposal @relation("ProposalRevisions", fields: [proposalId], references: [id], onDelete: Cascade)
+
+  parentRevisionId String?
+  parentRevision   ProposalRevision?  @relation("RevisionChain", fields: [parentRevisionId], references: [id], onDelete: SetNull)
+  childRevisions   ProposalRevision[] @relation("RevisionChain")
+
+  authorPubkey String
+  /// Короткое описание изменения (аналог commit message).
+  message String
+
+  /// Снимок элементов в формате массива CREATE payloads (как `creates` в sync-actions).
+  snapshot Json
+
+  /// Краткая сводка относительно parent (added/removed/changed), для UI timeline.
+  diffSummary Json?
+
+  isBaseline Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  proposalsAsHead Proposal[] @relation("ProposalHeadRevision")
+
+  @@index([proposalId, createdAt])
+  @@index([parentRevisionId])
 }
 
 model ChangeAction {

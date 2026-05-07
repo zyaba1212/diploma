@@ -41,6 +41,7 @@ export async function GET(req: Request) {
     REJECTED: 0,
     APPLIED: 0,
     CANCELLED: 0,
+    WITHDRAWN: 0,
   };
   for (const row of proposalsByStatus) {
     proposalCounts[row.status] = row._count._all;

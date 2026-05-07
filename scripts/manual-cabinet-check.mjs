@@ -41,7 +41,7 @@ async function main() {
   assert(b3.inDatabase === true, 'expected inDatabase=true after set');
   assert(b3.username === username1, 'username mismatch after set');
 
-  // Second set attempt with another username should succeed (username can be changed after set).
+  // Second set attempt with another username within 30-day cooldown must be rejected (429).
   const username2 = `cab_${(Date.now() + 1).toString().slice(-10)}`;
   const ts2 = new Date().toISOString();
   const message2 = `diploma-z96a username\npubkey=${pubkey}\nusername=${username2}\nts=${ts2}`;
@@ -54,14 +54,16 @@ async function main() {
     body: JSON.stringify({ publicKey: pubkey, message: message2, signature: signature2, username: username2 }),
   });
   const b4 = await r4.json();
-  assert(r4.status === 200, `expected 200 on changing username after set, got ${r4.status}; body=${JSON.stringify(b4)}`);
-  assert(b4.ok === true, `expected ok=true on second username change; body=${JSON.stringify(b4)}`);
+  assert(r4.status === 429, `expected 429 cooldown on second change within a month, got ${r4.status}; body=${JSON.stringify(b4)}`);
+  assert(b4.ok === false && b4.code === 'username_cooldown', `expected cooldown payload; body=${JSON.stringify(b4)}`);
+  assert(typeof b4.msRemaining === 'number' && b4.msRemaining > 0, 'expected positive msRemaining');
 
   const r5 = await fetch(`${BASE_URL}/api/profile?pubkey=${pubkey}`);
   const b5 = await r5.json();
-  assert(r5.status === 200, `GET /api/profile after 2nd set status ${r5.status}`);
-  assert(b5.username === username2, 'username mismatch after 2nd set');
-  assert(typeof b5.usernameSetAt === 'string' && b5.usernameSetAt.length > 0, 'expected usernameSetAt non-null after 2nd set');
+  assert(r5.status === 200, `GET /api/profile after cooldown-rejection status ${r5.status}`);
+  assert(b5.username === username1, 'username must remain the first one after cooldown rejection');
+  assert(typeof b5.usernameSetAt === 'string' && b5.usernameSetAt.length > 0, 'expected usernameSetAt non-null');
+  assert(typeof b5.usernameNextChangeAt === 'string' && b5.usernameNextChangeAt.length > 0, 'expected usernameNextChangeAt to be set');
 
   const rCab = await fetch(`${BASE_URL}/cabinet`);
   const html = await rCab.text();

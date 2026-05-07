@@ -1,12 +1,59 @@
 import { NextResponse } from 'next/server';
+import { createCorrelationId, internalApiError } from '@/lib/apiError';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
-import { circuitFetch } from '@/lib/circuitBreaker';
-import { internalApiError } from '@/lib/apiError';
-import { getCachedGeocode, setCachedGeocode } from '@/lib/geocodeCache';
+import {
+  getCachedGeocode,
+  setCachedGeocode,
+  tryGetGeocodeFromRedis,
+} from '@/lib/geocodeCache';
+import { GEOCODE_MEMORY_TTL_REVERSE_MS } from '@/lib/geocode/constants';
+import { runNominatimJson } from '@/lib/geocode/nominatimUpstream';
+import { logGeocodeServerEvent, type GeocodeServerOutcome } from '@/lib/geocode/observability';
+
+function reverseFailurePublicMessage(
+  outcome: GeocodeServerOutcome,
+  upstreamMessage: string,
+): string {
+  if (upstreamMessage === 'geocode temporarily unavailable') {
+    return 'geocode temporarily unavailable';
+  }
+  switch (outcome) {
+    case 'upstream_timeout':
+      return 'reverse geocode upstream timeout';
+    case 'circuit_open':
+      return 'geocode temporarily unavailable';
+    case 'upstream_http_error':
+    case 'fetch_error':
+    case 'parse_error':
+      return 'reverse geocode failed';
+    default:
+      return 'reverse geocode failed';
+  }
+}
+
+function reverseFailureCode(outcome: GeocodeServerOutcome): string {
+  switch (outcome) {
+    case 'upstream_timeout':
+      return 'geocode_upstream_timeout';
+    case 'circuit_open':
+      return 'geocode_circuit_open';
+    case 'upstream_http_error':
+      return 'geocode_upstream_http_error';
+    case 'fetch_error':
+      return 'geocode_fetch_error';
+    case 'parse_error':
+      return 'geocode_parse_error';
+    default:
+      return 'geocode_reverse_failed';
+  }
+}
+
+export const maxDuration = 60;
 
 export async function GET(req: Request) {
+  const correlationId = createCorrelationId();
   const clientIp = getClientIp(req);
-  if (!(await checkRateLimit(`geocode.reverse:${clientIp}`, 60, 60_000))) {
+  if (!(await checkRateLimit(`geocode.reverse:${clientIp}`, 90, 60_000))) {
     return NextResponse.json({ error: 'rate limit exceeded' }, { status: 429 });
   }
 
@@ -21,9 +68,41 @@ export async function GET(req: Request) {
   }
 
   const cacheKey = `geocode:reverse:lat:${lat}:lng:${lng}`;
-  const cached = getCachedGeocode<unknown>(cacheKey);
-  if (cached) {
-    return NextResponse.json(cached, { headers: { 'cache-control': 'no-store' } });
+  const mem = getCachedGeocode<unknown>(cacheKey);
+  if (mem) {
+    logGeocodeServerEvent({
+      route: 'reverse',
+      durationMs: 0,
+      outcome: 'cache_memory_hit',
+      correlationId,
+    });
+    return NextResponse.json(mem, {
+      headers: {
+        'cache-control': 'no-store',
+        'x-correlation-id': correlationId,
+        'x-geocode-cache': 'memory',
+        'x-geocode-outcome': 'cache_memory_hit',
+      },
+    });
+  }
+
+  const redisHit = await tryGetGeocodeFromRedis<unknown>(cacheKey);
+  if (redisHit) {
+    setCachedGeocode(cacheKey, redisHit, GEOCODE_MEMORY_TTL_REVERSE_MS);
+    logGeocodeServerEvent({
+      route: 'reverse',
+      durationMs: 0,
+      outcome: 'cache_redis_hit',
+      correlationId,
+    });
+    return NextResponse.json(redisHit, {
+      headers: {
+        'cache-control': 'no-store',
+        'x-correlation-id': correlationId,
+        'x-geocode-cache': 'redis',
+        'x-geocode-outcome': 'cache_redis_hit',
+      },
+    });
   }
 
   const upstream = new URL('https://nominatim.openstreetmap.org/reverse');
@@ -31,28 +110,30 @@ export async function GET(req: Request) {
   upstream.searchParams.set('lon', String(lng));
   upstream.searchParams.set('format', 'json');
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const result = await runNominatimJson<unknown>({
+    routeLabel: 'reverse',
+    circuitKey: 'geocode:reverse',
+    cacheKey,
+    upstreamUrl: upstream,
+    ttlMs: GEOCODE_MEMORY_TTL_REVERSE_MS,
+    correlationId,
+  });
 
-  try {
-    const r = await circuitFetch(`geocode:reverse`, () =>
-      fetch(upstream, {
-        signal: controller.signal,
-        headers: {
-          'user-agent': 'diploma-z96a/1.0',
-          accept: 'application/json',
-        },
-        cache: 'no-store',
-      }),
-    );
-    if (!r.ok) return internalApiError('upstream error', 502);
-    const data = await r.json();
-    setCachedGeocode(cacheKey, data);
-    return NextResponse.json(data, { headers: { 'cache-control': 'no-store' } });
-  } catch {
-    return internalApiError('reverse geocode failed', 502);
-  } finally {
-    clearTimeout(timeout);
+  if (!result.ok) {
+    const msg = reverseFailurePublicMessage(result.outcome, result.message);
+    const code = reverseFailureCode(result.outcome);
+    return internalApiError(msg, 502, correlationId, code);
   }
-}
 
+  const headers: Record<string, string> = {
+    'cache-control': 'no-store',
+    'x-correlation-id': correlationId,
+    'x-geocode-ms': String(result.durationMs),
+    'x-geocode-outcome': result.outcome,
+  };
+  if (result.outcome === 'stale_fallback') {
+    headers['x-geocode-stale'] = '1';
+  }
+
+  return NextResponse.json(result.data, { headers });
+}

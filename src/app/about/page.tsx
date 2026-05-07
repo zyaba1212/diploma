@@ -109,8 +109,8 @@ export default function AboutPage() {
               }}
             >
               <li><strong style={{ color: 'var(--text)' }}>Next.js</strong> — маршрутизация и UI</li>
-              <li><strong style={{ color: 'var(--text)' }}>Three.js</strong> — интерактивный 3D-глобус</li>
-              <li><strong style={{ color: 'var(--text)' }}>Leaflet</strong> — 2D-карта инфраструктуры</li>
+              <li><strong style={{ color: 'var(--text)' }}>Three.js</strong> — интерактивный глобус</li>
+              <li><strong style={{ color: 'var(--text)' }}>Leaflet</strong> — карта инфраструктуры</li>
               <li><strong style={{ color: 'var(--text)' }}>Solana</strong> — on-chain фиксация и голосование</li>
               <li><strong style={{ color: 'var(--text)' }}>Prisma + PostgreSQL</strong> — данные и миграции</li>
             </ul>
@@ -127,7 +127,7 @@ export default function AboutPage() {
                 color: colors.text.primary,
               }}
             >
-              <li>Визуализация глобальной инфокоммуникационной инфраструктуры в 3D и на карте</li>
+              <li>Визуализация глобальной инфокоммуникационной инфраструктуры на глобусе и карте</li>
               <li>Песочница для экспериментов с архитектурными предложениями по развитию сети</li>
               <li>On-chain управление: голосование по предложениям с привязкой к блокчейну Solana</li>
             </ul>

@@ -20,10 +20,22 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'diploma-z96a',
-  description: 'WEB3 network visualization on 3D globe and 2D map',
+  title: {
+    default: 'Главная - z96a',
+    template: '%s - z96a',
+  },
+  description: 'WEB3 network visualization on globe and map',
   manifest: '/manifest.webmanifest',
-  applicationName: 'diploma-z96a',
+  applicationName: 'z96a',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon-z96a.svg', type: 'image/svg+xml' },
+      { url: '/icons/icon-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icons/icon-16.png', sizes: '16x16', type: 'image/png' },
+    ],
+    apple: [{ url: '/icons/icon-180.png', sizes: '180x180', type: 'image/png' }],
+  },
   formatDetection: {
     telephone: false,
   },

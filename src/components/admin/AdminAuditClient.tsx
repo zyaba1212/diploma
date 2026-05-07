@@ -34,7 +34,7 @@ export function AdminAuditClient() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [copiedWallet, setCopiedWallet] = useState<string | null>(null);
+  const [lastCopied, setLastCopied] = useState<string | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const copyToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -76,19 +76,19 @@ export function AdminAuditClient() {
     }, 2500);
   }, []);
 
-  const copyWallet = useCallback(
-    async (wallet: string) => {
+  const copyToClipboard = useCallback(
+    async (text: string, okToast: string, failToast = 'Не удалось скопировать') => {
       if (!navigator.clipboard?.writeText) {
         showCopyToast('Копирование недоступно в этом браузере');
         return;
       }
       try {
-        await navigator.clipboard.writeText(wallet);
-        setCopiedWallet(wallet);
-        setTimeout(() => setCopiedWallet((prev) => (prev === wallet ? null : prev)), 1500);
-        showCopyToast('Адрес скопирован в буфер обмена');
+        await navigator.clipboard.writeText(text);
+        setLastCopied(text);
+        setTimeout(() => setLastCopied((prev) => (prev === text ? null : prev)), 1500);
+        showCopyToast(okToast);
       } catch {
-        showCopyToast('Не удалось скопировать адрес');
+        showCopyToast(failToast);
       }
     },
     [showCopyToast],
@@ -121,9 +121,10 @@ export function AdminAuditClient() {
           render: (r) => {
             const objectLabel = formatAuditTargetType(r.targetType);
             const userWallet = r.targetType === 'User' ? getUserWalletFromMeta(r.meta) : null;
+            const proposalId = r.targetType === 'Proposal' && r.targetId ? r.targetId : null;
 
             if (userWallet) {
-              const title = copiedWallet === userWallet ? 'Кошелёк скопирован' : `Скопировать кошелёк: ${userWallet}`;
+              const title = lastCopied === userWallet ? 'Кошелёк скопирован' : `Скопировать кошелёк: ${userWallet}`;
               return (
                 <span
                   style={{
@@ -135,23 +136,47 @@ export function AdminAuditClient() {
                   }}
                 >
                   {objectLabel}
-                  <button
+                  <Button
                     type="button"
-                    onClick={() => void copyWallet(userWallet)}
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => void copyToClipboard(userWallet, 'Адрес скопирован в буфер обмена', 'Не удалось скопировать адрес')}
                     title={title}
                     aria-label={title}
-                    style={{
-                      padding: 0,
-                      border: 'none',
-                      background: 'transparent',
-                      fontSize: 12,
-                      color: 'var(--fg)',
-                      cursor: 'pointer',
-                      lineHeight: 1,
-                    }}
+                    style={{ padding: 0, border: 'none', background: 'transparent', fontSize: 12, color: 'var(--fg)', lineHeight: 1 }}
                   >
                     ⧉
-                  </button>
+                  </Button>
+                </span>
+              );
+            }
+
+            if (proposalId) {
+              const title = lastCopied === proposalId ? 'ID скопирован' : `Скопировать ID предложения: ${proposalId}`;
+              return (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 12,
+                    color: 'var(--fg)',
+                  }}
+                >
+                  {objectLabel}
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() =>
+                      void copyToClipboard(proposalId, 'ID предложения скопирован в буфер обмена', 'Не удалось скопировать ID')
+                    }
+                    title={title}
+                    aria-label={title}
+                    style={{ padding: 0, border: 'none', background: 'transparent', fontSize: 12, color: 'var(--fg)', lineHeight: 1 }}
+                  >
+                    ⧉
+                  </Button>
                 </span>
               );
             }

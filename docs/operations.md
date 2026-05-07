@@ -4,6 +4,8 @@
 
 См. также:
 
+- [`docs/geocode-operations.md`](./geocode-operations.md) — geocode (Nominatim proxy): таймауты, Redis-кэш, SLO, логи.
+- [`docs/map-mode-benchmark.md`](./map-mode-benchmark.md) — KPI режима карты, ручной benchmark, curl-smoke; tile-proxy env (`TILE_RATE_LIMIT_*`, `TILE_DEBUG_LOG`).
 - [`docs/secrets-policy.md`](./secrets-policy.md) — политика секретов.
 - [`docs/release-hardening.md`](./release-hardening.md) — GO/NO-GO перед релизом и откат.
 - `npm run ops:rollback-drill` — автоматизированная часть rollback drill (`scripts/rollback-drill.mjs`).
@@ -77,6 +79,22 @@ Node policy в CI: `22`.
 npm ci && npm run lint && npm run build
 ```
 
+## 4.5) Map mode — tile proxy и производительность
+
+Pan/zoom генерирует много параллельных запросов к [`/api/tile`](../src/app/api/tile/route.ts). Настройки:
+
+| Переменная | Default | Назначение |
+|------------|---------|------------|
+| `TILE_RATE_LIMIT_MAX` | `4000` | Макс. запросов на IP за окно (in-memory / Redis при `RATE_LIMIT_BACKEND=redis`). |
+| `TILE_RATE_LIMIT_WINDOW_MS` | `60000` | Окно лимита (мс). |
+| `TILE_DEBUG_LOG` | (не `0`) | Структурированные строки `scope:tile` в stdout: по умолчанию **без** логирования каждого успешного тайла; `1` или `verbose` — полный лог; `0` — выключить. |
+
+Circuit breaker upstream (мягче дефолта geocode): [`TILE_CIRCUIT_OPTS`](../src/lib/tile/tileConstants.ts). Корреляция: заголовки **`x-correlation-id`** / **`x-request-id`** на запросе к `/api/tile` (иначе генерируется UUID).
+
+**Наблюдаемость / алерты (ручные или по логам):** всплески JSON-строк с `"outcome":"rate_limited"` или `"outcome":"circuit_open"` относительно базовой линии; доля **502** по `/api/tile` в gateway.
+
+Ключевые KPI и ручной benchmark: [`docs/map-mode-benchmark.md`](./map-mode-benchmark.md). Клиентский perf-трейс reverse: **`NEXT_PUBLIC_MAP_PERF_DEBUG=1`**. SLA геокода (клиент ↔ Next ↔ Nominatim): константы в [`src/lib/geocode/constants.ts`](../src/lib/geocode/constants.ts) — **`GEOCODE_CLIENT_FETCH_TIMEOUT_MS`** (браузер), **`GEOCODE_UPSTREAM_TIMEOUT_MS`** (прокси → Nominatim); при ошибках reverse в ответе возможны поля **`code`** / заголовок **`x-geocode-code`**.
+
 ## 5) Smoke Operations Checks
 
 При поднятом `npm run dev`:
@@ -90,28 +108,47 @@ npm run test:proposals-stage8
 
 ### Новости RSS → `NewsCache`
 
-- `GET /api/news` **только** отдаёт записи из PostgreSQL (`NewsCache`), без загрузки RSS в hot path. Опционально: **`?days=N`** — только записи с `publishedAt` не старше N календарных суток (страница `/news` запрашивает `days=3`).
-- Прямая синхронизация RSS → БД **без** запущенного Next.js: `npm run scripts:sync-news-db` ([`scripts/sync-news-db.ts`](../scripts/sync-news-db.ts), нужен `DATABASE_URL` в `.env` / `.env.local`).
-- Синхронизация источников: `src/lib/news/syncFeeds.ts`, вызов из защищённого endpoint:
-  - `POST /api/cron/news-sync` или `GET /api/cron/news-sync`
-  - заголовок `Authorization: Bearer <CRON_SECRET>` **или** query `?secret=<CRON_SECRET>` (query слабее, не логировать URL с секретом).
-  - **Vercel Cron:** в корне репозитория [`vercel.json`](../vercel.json) — расписание **каждый час** (`0 * * * *`), запрос GET на `/api/cron/news-sync` с заголовком `x-vercel-cron: 1` (секрет для этого вызова не нужен; не подделывается снаружи Vercel). Требуется тариф с поддержкой Cron Jobs (см. документацию Vercel).
-- Ручной/локальный вызов: env `CRON_SECRET` (минимум 8 символов). Без секрета и без заголовка Vercel Cron endpoint отвечает `503`.
-- **503 при `npm run scripts:sync-news`:** у процесса `npm run dev` нет `CRON_SECRET`. Добавьте в **`.env.local`** в корне проекта строку `CRON_SECRET=тот-же-секрет-ascii` и **перезапустите** dev-сервер (Next подхватывает env только при старте). Скрипт sync сам читает `.env.local` для заголовка Bearer.
-- Локально после `npm run dev` (bash / Linux / macOS):
+**Live (через приложение):**
 
-```bash
-CRON_SECRET="your-long-random-secret" npm run scripts:sync-news
-```
+- `GET /api/news` перед выборкой вызывает `fetchAndCacheNews()` ([`src/lib/news.ts`](../src/lib/news.ts)) — RSS → `NewsCache`, in-process TTL ~30 мин.
+- Ответ пагинации: **`items`**, **`total`**, **`page`**, **`pageSize`**, **`hasMore`**, **`windowDays`** (окно по `publishedAt` расширяется 3→7→14→…→вся таблица, если для текущей страницы записей не хватает). Параметры: **`page`**, **`pageSize`** (макс. 100), **`days`**. Страница `/news` передаёт `days=3`.
+- **`?legacy=1`** — прежний JSON-массив + **`limit`** / **`offset`**.
 
-**Windows PowerShell** (синтаксис `VAR=value cmd` не работает в PowerShell). Секрет — **только ASCII** (латиница, цифры, символы); кириллица в `Authorization` вызовет ошибку `ByteString` в fetch.
+**Ограничение RSS:** в фиде только «хвост» последних записей; разрывы по датам в ленте — из-за фильтра ключевых слов, лимита на источник и того, что в кэш попадают не все дни. Полный архив издателя этим путём не восстановить.
 
-```powershell
-$env:CRON_SECRET = "local-dev-secret-change-me-32"
-npm run scripts:sync-news
-```
+**Cron (реализовано):**
 
-`BASE_URL` по умолчанию `http://127.0.0.1:3000`.
+- `GET` или `POST` [`/api/cron/news-sync`](../src/app/api/cron/news-sync/route.ts) — принудительный `fetchAndCacheNews({ force: true })`.
+- Допуск: заголовок **`x-vercel-cron: 1`** (Vercel Cron из [`vercel.json`](../vercel.json), каждый час) **или** `Authorization: Bearer <CRON_SECRET>` **или** query `?secret=<CRON_SECRET>` (query слабее, не логировать с секретом).
+- Если `CRON_SECRET` не задан или короче 8 символов — для вызовов **без** `x-vercel-cron` ответ **`503`** (`CRON_SECRET not configured`); при неверном секрете — **`401`**.
+
+**Backfill (отдельно от runtime):**
+
+CLI: `npm run scripts:news-backfill` — [`scripts/news-backfill.ts`](../scripts/news-backfill.ts). Для записи в БД нужен **`DATABASE_URL`**.
+
+1. **RSS-режим (хвост фида, без архива):** `--mode=rss` (по умолчанию).
+   - Пример: `npx tsx scripts/news-backfill.ts --mode=rss --dry-run --per-source=60 --days-back=90`
+   - Флаги: **`--dry-run`**, **`--per-source`**, **`--days-back`**, **`--source`** (подстрока имени), **`--limit`** (суммарный лимит по источникам).
+
+2. **Deep-режим (sitemap-цепочки, история шире RSS):** `--mode=deep`.
+   - Реестр URL и паттернов: [`src/lib/news/deepSourceRegistry.ts`](../src/lib/news/deepSourceRegistry.ts); движок: [`src/lib/news/deepBackfill.ts`](../src/lib/news/deepBackfill.ts).
+   - Пример bootstrap: `npx tsx scripts/news-backfill.ts --mode=deep --dry-run --days-back=365 --max-urls=300`
+   - Диапазон дат: **`--from=YYYY-MM-DD`**, **`--to=YYYY-MM-DD`** (если заданы, `--days-back` не используется).
+   - Лимиты: **`--max-urls`**, **`--max-sitemaps`**, **`--concurrency`**, фильтр **`--source=`**, **`--meta-title`** (дороже: HTML → `og:title`).
+   - Ответ по источникам в логе: `sitemapsFetched`, `urlsDiscovered`, `urlsAfterPathFilter`, `urlsAfterDateFilter`, `urlsAfterRelevance`, `upserted`, `errors[]`.
+   - Ограничения: sitemap-URL эвристические (сайты меняют структуру); часть издателей может отдавать **403/пусто** с датацентровых IP; записи **без `<lastmod>`** при фильтре по датам отбрасываются.
+
+**Cron deep backfill (ночной):**
+
+- `GET`/`POST` [`/api/cron/news-deep-backfill`](../src/app/api/cron/news-deep-backfill/route.ts) — тот же контракт авторизации, что у `news-sync`.
+- Query по умолчанию в [`vercel.json`](../vercel.json): `daysBack=3&maxUrls=120` (можно переопределить: `daysBack`, `maxUrls`, `metaTitle=1`, `source=`, `dryRun=1`).
+- Live `GET /api/news` **не** запускает deep backfill.
+
+**Runbook (кратко):**
+
+1. Первичная история: локально `npx tsx scripts/news-backfill.ts --mode=deep --from=... --to=... --max-urls=500` (без `--dry-run`), следить за логами `errors`.
+2. Регулярно: полагаться на Vercel cron deep + hourly RSS sync; при сбое — ручной `news-sync` и точечный `--mode=deep --source=...`.
+3. Troubleshooting: если `sitemap fetch failed` — проверить URL в реестре, robots/403, при необходимости добавить fallback `sitemapUrls` для источника.
 
 ## 6) Runtime Guards (текущее состояние)
 
@@ -197,6 +234,7 @@ npm run scripts:sync-news
 ## Operational Invariants
 
 - Existing API contracts for `/api/network`, `/api/auth/*`, `/api/tile`, `/api/geocode/*`, and Stage 5-8 `/api/proposals/*` must remain backward compatible unless explicitly versioned.
+  - **`GET /api/network`**: ответ по-прежнему содержит **`providers`** и **`elements`**. Для запросов с параметром **`bbox`** дополнительно может присутствовать опциональный блок **`meta`** (`worldish`, `reason`, эхо **`bbox`**) — только диагностика; клиенты и скрипты, парсящие только `providers`/`elements`, остаются совместимыми. Ветка без `bbox` (`take`-листинг) **`meta` не возвращает**.
 - Stage 6 signature message format remains: `diploma-z96a propose:<contentHash>`.
 - Stage 7 rollback depends on `HistoryEntry.diff.kind` semantics (`CREATE|UPDATE|DELETE`) and must stay aligned with backend parser.
 - Deployment must not expose private keys (`SOLANA_SUBMISSION_PAYER_PRIVATE_KEY*`) in logs or client bundles.
