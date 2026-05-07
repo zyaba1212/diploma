@@ -20,6 +20,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      # package-lock.json is generated with npm 11; default npm on Node 22 (npm 10)
+      # reports package.json / lock out of sync and fails `npm ci`.
+      - name: Align npm with lockfile
+        run: npm install -g npm@11.8.0
+
       - name: Install dependencies
         run: npm ci
 
